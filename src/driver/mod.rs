@@ -10,6 +10,9 @@ mod fsync;
 mod op;
 pub(crate) use op::Op;
 
+mod strop;
+pub(crate) use strop::StrOp;
+
 mod open;
 
 mod read;
@@ -57,12 +60,16 @@ pub(crate) struct Inner {
 pub(crate) enum Split {
     /// The single shot operations.
     Single(op::Lifecycle),
+
+    /// The multi shot operations.
+    Multi(strop::Lifecycle),
 }
 
 impl Split {
     pub(super) fn complete(&mut self, result: io::Result<u32>, flags: u32) -> bool {
         match self {
-            Split::Single(lifecycle) => lifecycle.complete(result, flags)
+            Split::Single(lifecycle) => lifecycle.complete(result, flags),
+            Split::Multi(lifecycle) => lifecycle.complete(result, flags),
         }
     }
 }
@@ -171,9 +178,14 @@ impl Ops {
         self.0.get_mut(index)
     }
 
-    // Insert a new operation
+    // Insert a new single shot operation
     fn insert_single(&mut self) -> usize {
         self.0.insert(Split::Single(op::Lifecycle::Submitted))
+    }
+
+    // Insert a new multi shot operation
+    fn insert_multi(&mut self) -> usize {
+        self.0.insert(Split::Multi(strop::Lifecycle::Submitted))
     }
 
     // Remove an operation

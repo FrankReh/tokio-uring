@@ -10,7 +10,7 @@ use io_uring::squeue;
 use crate::driver;
 
 /// In-flight operation
-pub(crate) struct Op<T: 'static> {
+pub(crate) struct StrOp<T: 'static> {
     // Driver running the operation
     pub(super) driver: Rc<RefCell<driver::Inner>>,
 
@@ -46,12 +46,12 @@ pub(crate) enum Lifecycle {
     Completed(io::Result<u32>, u32),
 }
 
-impl<T> Op<T> {
+impl<T> StrOp<T> {
     /// Create a new operation
-    fn new(data: T, inner: &mut driver::Inner, inner_rc: &Rc<RefCell<driver::Inner>>) -> Op<T> {
-        Op {
+    fn new(data: T, inner: &mut driver::Inner, inner_rc: &Rc<RefCell<driver::Inner>>) -> StrOp<T> {
+        StrOp {
             driver: inner_rc.clone(),
-            index: inner.ops.insert_single(),
+            index: inner.ops.insert_multi(),
             data: Some(data),
         }
     }
@@ -60,7 +60,7 @@ impl<T> Op<T> {
     ///
     /// `state` is stored during the operation tracking any state submitted to
     /// the kernel.
-    pub(super) fn submit_with<F>(data: T, f: F) -> io::Result<Op<T>>
+    pub(super) fn submit_with<F>(data: T, f: F) -> io::Result<StrOp<T>>
     where
         F: FnOnce(&mut T) -> squeue::Entry,
     {
@@ -74,7 +74,7 @@ impl<T> Op<T> {
             }
 
             // Create the operation
-            let mut op = Op::new(data, inner, inner_rc);
+            let mut op = StrOp::new(data, inner, inner_rc);
 
             // Configure the SQE
             let sqe = f(op.data.as_mut().unwrap()).user_data(op.index as _);
@@ -93,19 +93,19 @@ impl<T> Op<T> {
     }
 
     /// Try submitting an operation to uring
-    pub(super) fn try_submit_with<F>(data: T, f: F) -> io::Result<Op<T>>
+    pub(super) fn try_submit_with<F>(data: T, f: F) -> io::Result<StrOp<T>>
     where
         F: FnOnce(&mut T) -> squeue::Entry,
     {
         if driver::CURRENT.is_set() {
-            Op::submit_with(data, f)
+            StrOp::submit_with(data, f)
         } else {
             Err(io::ErrorKind::Other.into())
         }
     }
 }
 
-impl<T> Future for Op<T>
+impl<T> Future for StrOp<T>
 where
     T: Unpin + 'static,
 {
@@ -119,8 +119,8 @@ where
         let lifecycle = inner.ops.get_mut(me.index).expect("invalid internal state");
 
         let lifecycle = match lifecycle {
-            driver::Split::Single( lifecycle ) => lifecycle,
-            driver::Split::Multi( _ ) => panic!("expected single shot op, got multi shot op"),
+            driver::Split::Single( _ ) => panic!("expected multi shot op, got single shot op"),
+            driver::Split::Multi( lifecycle ) => lifecycle,
         };
 
         match mem::replace(lifecycle, Lifecycle::Submitted) {
@@ -151,17 +151,19 @@ where
     }
 }
 
-impl<T> Drop for Op<T> {
+impl<T> Drop for StrOp<T> {
     fn drop(&mut self) {
         let mut inner = self.driver.borrow_mut();
         let lifecycle = match inner.ops.get_mut(self.index) {
             Some(lifecycle) => lifecycle,
             None => return,
         };
+
         let lifecycle = match lifecycle {
-            driver::Split::Single( lifecycle ) => lifecycle,
-            driver::Split::Multi( _ ) => panic!("expected single shot op, got multi shot op"),
+            driver::Split::Single( _ ) => panic!("expected multi shot op, got single shot op"),
+            driver::Split::Multi( lifecycle ) => lifecycle,
         };
+
 
         match lifecycle {
             Lifecycle::Submitted | Lifecycle::Waiting(_) => {
@@ -314,7 +316,7 @@ mod test {
         release(driver);
     }
 
-    fn init() -> (Op<Rc<()>>, crate::driver::Driver, Rc<()>) {
+    fn init() -> (StrOp<Rc<()>>, crate::driver::Driver, Rc<()>) {
         use crate::driver::Driver;
 
         let driver = Driver::new().unwrap();
@@ -323,13 +325,13 @@ mod test {
 
         let op = {
             let mut inner = handle.borrow_mut();
-            Op::new(data.clone(), &mut inner, &handle)
+            StrOp::new(data.clone(), &mut inner, &handle)
         };
 
         (op, driver, data)
     }
 
-    fn complete(op: &Op<Rc<()>>, result: io::Result<u32>) {
+    fn complete(op: &StrOp<Rc<()>>, result: io::Result<u32>) {
         op.driver.borrow_mut().ops.complete(op.index, result, 0);
     }
 
