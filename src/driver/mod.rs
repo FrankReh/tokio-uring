@@ -54,9 +54,22 @@ pub(crate) struct Inner {
     pub(crate) uring: IoUring,
 }
 
+pub(crate) enum Split {
+    /// The single shot operations.
+    Single(op::Lifecycle),
+}
+
+impl Split {
+    pub(super) fn complete(&mut self, result: io::Result<u32>, flags: u32) -> bool {
+        match self {
+            Split::Single(lifecycle) => lifecycle.complete(result, flags)
+        }
+    }
+}
+
 // When dropping the driver, all in-flight operations must have completed. This
 // type wraps the slab and ensures that, on drop, the slab is empty.
-struct Ops(Slab<op::Lifecycle>);
+struct Ops(Slab<Split>);
 
 scoped_thread_local!(pub(crate) static CURRENT: Rc<RefCell<Inner>>);
 
@@ -154,13 +167,13 @@ impl Ops {
         Ops(Slab::with_capacity(64))
     }
 
-    fn get_mut(&mut self, index: usize) -> Option<&mut op::Lifecycle> {
+    fn get_mut(&mut self, index: usize) -> Option<&mut Split> {
         self.0.get_mut(index)
     }
 
     // Insert a new operation
-    fn insert(&mut self) -> usize {
-        self.0.insert(op::Lifecycle::Submitted)
+    fn insert_single(&mut self) -> usize {
+        self.0.insert(Split::Single(op::Lifecycle::Submitted))
     }
 
     // Remove an operation

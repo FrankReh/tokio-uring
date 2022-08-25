@@ -51,7 +51,7 @@ impl<T> Op<T> {
     fn new(data: T, inner: &mut driver::Inner, inner_rc: &Rc<RefCell<driver::Inner>>) -> Op<T> {
         Op {
             driver: inner_rc.clone(),
-            index: inner.ops.insert(),
+            index: inner.ops.insert_single(),
             data: Some(data),
         }
     }
@@ -117,6 +117,7 @@ where
         let me = &mut *self;
         let mut inner = me.driver.borrow_mut();
         let lifecycle = inner.ops.get_mut(me.index).expect("invalid internal state");
+        let driver::Split::Single( lifecycle ) = lifecycle; // Panic if the wrong type at index.
 
         match mem::replace(lifecycle, Lifecycle::Submitted) {
             Lifecycle::Submitted => {
@@ -153,6 +154,7 @@ impl<T> Drop for Op<T> {
             Some(lifecycle) => lifecycle,
             None => return,
         };
+        let driver::Split::Single( lifecycle ) = lifecycle; // Panic if the wrong type at index.
 
         match lifecycle {
             Lifecycle::Submitted | Lifecycle::Waiting(_) => {
