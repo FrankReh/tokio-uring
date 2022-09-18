@@ -70,12 +70,12 @@ impl TcpListener {
     /// TODO missing doc
     /// This is the slow version of the accept_multishot operation, where the implementation is
     /// a sequence of single accept operations under the hood.
-    pub fn accept_multishot(&self) -> impl Stream<Item = io::Result<(TcpStream, SocketAddr)>> + '_ {
+    pub fn accept_multishot(&self) -> io::Result<(impl Stream<Item = io::Result<(TcpStream, SocketAddr)>> + '_, u64)> {
         use async_stream::try_stream;
         use tokio::pin;
         use tokio_stream::StreamExt;
-        try_stream! {
-            let s = self.inner.accept_multishot();
+        let (s, cancelid) = self.inner.accept_multishot()?;
+        Ok((try_stream! {
             pin!(s);
             while let Some((socket, socket_addr)) = s.try_next().await? {
                 let stream = TcpStream { inner: socket };
@@ -84,7 +84,8 @@ impl TcpListener {
                 })?;
                 yield (stream, socket_addr)
             }
-        }
+        },
+        cancelid))
     }
 
     /// TODO missing doc

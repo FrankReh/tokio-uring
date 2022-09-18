@@ -88,12 +88,18 @@ impl Socket {
     // TODO
     pub(crate) fn accept_multishot(
         &self,
-    ) -> impl Stream<Item = io::Result<(Socket, Option<SocketAddr>)>> + '_ {
+    ) -> io::Result<(impl Stream<Item = io::Result<(Socket, Option<SocketAddr>)>> + '_, u64)> {
         use async_stream::try_stream;
         use tokio_stream::StreamExt;
 
-        try_stream! {
-            let mut op = StrOp::accept_multishot(&self.fd)?;
+        // TODO what are the semantics of async cancel for a stream?
+        // If the StrOp is only created when the stream is awaited, then there is no index to use
+        // for the cancel id beforehand. If a stream can only be canceled after its started its
+        // 'next' loop, how to get at the cancel id?
+        // Should it be cancellable even if the operation hasn't been sent yet?
+        //let mut op = StrOp::accept_multishot(&self.fd)?; // TODO this step could have failed - the submission step could have failed. Wrong args or feature not supported.
+        let mut op = StrOp::accept_multishot(&self.fd)?;
+        Ok((try_stream! {
             while let Some(completion) = op.next().await {
                 // TODO this shouldn't quit the stream loop.
                 // Maybe this shouldn't be a try?
@@ -110,7 +116,8 @@ impl Socket {
                 };
                 yield (socket, addr.as_socket());
             }
-        }
+        },
+        0))
     }
 
     // Create an async stream of sockets and optional addresses from the open file descriptor. This

@@ -27,13 +27,15 @@ fn main() -> io::Result<()> {
             let listener = listener.clone();
             let tasks2 = tasks.clone();
             // TODO cleanup let task: JoinHandle<io::Result<()>> = tokio::task::spawn_local(async move {}
-            // TODO cleanup let task: JoinHandle<io::Result<()>> = tokio_uring::spawn(async move {}
-            let task: JoinHandle<io::Result<()>> = tokio::task::spawn_local(async move {
-                let s = listener.accept_multishot();
-                pin!(s);
-                while let Some((stream, _)) = s.try_next().await? {
+            //
+            // let task: JoinHandle<io::Result<()>> = tokio::task::spawn_local(async move {}
+            let task: JoinHandle<io::Result<()>> = tokio_uring::spawn(async move {
+                // TODO this could return an io::Result<Stream<...>, io::Error>.
+                let (stream, _cancelid) = listener.accept_multishot()?;
+                pin!(stream);
+                while let Some((tcp_stream, _)) = stream.try_next().await? {
                     let task2: JoinHandle<io::Result<()>> = tokio_uring::spawn(async move {
-                        let (result, _) = stream.write(RESPONSE).await;
+                        let (result, _) = tcp_stream.write(RESPONSE).await;
 
                         if let Err(err) = result {
                             eprintln!("Client connection failed: {}", err);
