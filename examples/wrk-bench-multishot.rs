@@ -6,7 +6,6 @@ use tokio::pin;
 use tokio_stream::StreamExt;
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::Mutex;
 
 pub const RESPONSE: &[u8] =
@@ -16,7 +15,7 @@ pub const ADDRESS: &str = "127.0.0.1:8080";
 
 fn main() -> io::Result<()> {
     tokio_uring::start(async {
-        let tasks = Arc::new(Mutex::new(VecDeque::with_capacity(16)));
+        let tasks = Rc::new(Mutex::new(VecDeque::with_capacity(16)));
         let listener = Rc::new(tokio_uring::net::TcpListener::bind(
             ADDRESS.parse().unwrap(),
         )?);
