@@ -184,8 +184,10 @@ impl Ops {
     }
 
     // Insert a new multi shot operation
-    fn insert_multi(&mut self) -> usize {
-        self.0.insert(Split::Multi(strop::Lifecycle::Submitted))
+    fn insert_multishot(&mut self) -> usize {
+        self.0.insert(Split::Multi(
+            strop::Lifecycle::Submitted(Default::default()),
+        ))
     }
 
     // Remove an operation

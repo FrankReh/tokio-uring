@@ -1,16 +1,18 @@
 use std::cell::RefCell;
-use std::future::Future;
+use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
+
+use tokio_stream::Stream;
 
 use io_uring::squeue;
 
 use crate::driver;
 
 /// In-flight operation
-pub(crate) struct StrOp<T: 'static> {
+pub(crate) struct StrOp<T: 'static + Clone> {
     // Driver running the operation
     pub(super) driver: Rc<RefCell<driver::Inner>>,
 
@@ -31,27 +33,48 @@ pub(crate) struct Completion<T> {
     pub(crate) flags: u32,
 }
 
+/// The ReadyFifo tracks what has been read out of the cq but not yet served through the stream.
+/// That is, this queue tracks the data that has been returned by the kernel but which is still
+/// waiting for the stream to be polled. The stream's poll_next will pick out one result at a time
+/// from thie queue. When the stream's poll_next finds this queue empty, the Lifecycle is
+/// transitioned to Waiting.
+///
+/// The ReadyFifo is carried across into the Waiting Lifecycle, even though the invariant
+/// guarantees it is empty at that time, to avoid reallocations by the VecDeque structure for cases
+/// where polling sometimes doesn't keep up with data being received. The memory allocated by the
+/// VecDeque will be freed when the multishot operation is completely done.
+///
+/// Also of note, the growth of the VecDeque is unbounded in this module. io_uring multishot
+/// operations currently rely on a fixed size file descriptor table (for the multishot accept
+/// operation) or on a fixed size set of buffers (for the multishot recv operations) and the kernel
+/// will build up its own queue of stalled operations if the fd table or the buffers are exhausted.
+/// So backpressure is expected to be enforced through the sizing of the fd table and the provided
+/// buffers. A future improvement could check the VecDeque capacity when transitioning from
+/// Submitted to Waiting and drop the empty queue in favor or a new one with zero capacity to start
+/// if memory reclamation was deemed important.
+type ReadyFifo = VecDeque<(io::Result<u32>, u32)>;
+
 pub(crate) enum Lifecycle {
     /// The operation has been submitted to uring and is currently in-flight
-    Submitted,
+    Submitted(ReadyFifo),
 
     /// The submitter is waiting for the completion of the operation
-    Waiting(Waker),
+    Waiting(ReadyFifo, Waker),
 
     /// The submitter no longer has interest in the operation result. The state
     /// must be passed to the driver and held until the operation completes.
     Ignored(Box<dyn std::any::Any>),
 
-    /// The operation has completed.
-    Completed(io::Result<u32>, u32),
+    /// The operation has produced results, either 'more' results or the final result.
+    Completed(ReadyFifo),
 }
 
-impl<T> StrOp<T> {
+impl<T: Clone> StrOp<T> {
     /// Create a new operation
     fn new(data: T, inner: &mut driver::Inner, inner_rc: &Rc<RefCell<driver::Inner>>) -> StrOp<T> {
         StrOp {
             driver: inner_rc.clone(),
-            index: inner.ops.insert_multi(),
+            index: inner.ops.insert_multishot(),
             data: Some(data),
         }
     }
@@ -91,27 +114,15 @@ impl<T> StrOp<T> {
             Ok(op)
         })
     }
-
-    /// Try submitting an operation to uring
-    pub(super) fn try_submit_with<F>(data: T, f: F) -> io::Result<StrOp<T>>
-    where
-        F: FnOnce(&mut T) -> squeue::Entry,
-    {
-        if driver::CURRENT.is_set() {
-            StrOp::submit_with(data, f)
-        } else {
-            Err(io::ErrorKind::Other.into())
-        }
-    }
 }
 
-impl<T> Future for StrOp<T>
+impl<T: Clone> Stream for StrOp<T>
 where
     T: Unpin + 'static,
 {
-    type Output = Completion<T>;
+    type Item = Completion<T>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         use std::mem;
 
         let me = &mut *self;
@@ -119,39 +130,72 @@ where
         let lifecycle = inner.ops.get_mut(me.index).expect("invalid internal state");
 
         let lifecycle = match lifecycle {
-            driver::Split::Single( _ ) => panic!("expected multi shot op, got single shot op"),
-            driver::Split::Multi( lifecycle ) => lifecycle,
+            driver::Split::Single(_) => panic!("expected multishot op, got single shot op"),
+            driver::Split::Multi(lifecycle) => lifecycle,
         };
 
-        match mem::replace(lifecycle, Lifecycle::Submitted) {
-            Lifecycle::Submitted => {
-                *lifecycle = Lifecycle::Waiting(cx.waker().clone());
+        match mem::replace(lifecycle, Lifecycle::Submitted(Default::default())) {
+            Lifecycle::Submitted(mut ready) => {
+                // If ready is empty, transition lifecycle to waiting with a waker,
+                // otherwise return front as next stream item and keep lifecycle at Submitted.
+                match ready.pop_front() {
+                    None => {
+                        *lifecycle = Lifecycle::Waiting(ready, cx.waker().clone());
+                        Poll::Pending
+                    }
+                    Some(front) => {
+                        *lifecycle = Lifecycle::Submitted(ready);
+                        Poll::Ready(Some(Completion {
+                            data: me
+                                .data
+                                .as_mut()
+                                .cloned()
+                                .take()
+                                .expect("unexpected operation state"),
+                            result: front.0,
+                            flags: front.1,
+                        }))
+                    }
+                }
+            }
+            Lifecycle::Waiting(ready, waker) if !waker.will_wake(cx.waker()) => {
+                *lifecycle = Lifecycle::Waiting(ready, cx.waker().clone());
                 Poll::Pending
             }
-            Lifecycle::Waiting(waker) if !waker.will_wake(cx.waker()) => {
-                *lifecycle = Lifecycle::Waiting(cx.waker().clone());
-                Poll::Pending
-            }
-            Lifecycle::Waiting(waker) => {
-                *lifecycle = Lifecycle::Waiting(waker);
+            Lifecycle::Waiting(ready, waker) => {
+                *lifecycle = Lifecycle::Waiting(ready, waker);
                 Poll::Pending
             }
             Lifecycle::Ignored(..) => unreachable!(),
-            Lifecycle::Completed(result, flags) => {
-                inner.ops.remove(me.index);
-                me.index = usize::MAX;
-
-                Poll::Ready(Completion {
-                    data: me.data.take().expect("unexpected operation state"),
-                    result,
-                    flags,
-                })
+            Lifecycle::Completed(mut ready) => {
+                // If ready is empty, cleanup index and indicate to stream we are done,
+                // otherwise return front as next stream item and keep lifecycle at Completed.
+                match ready.pop_front() {
+                    None => {
+                        inner.ops.remove(me.index);
+                        me.index = usize::MAX;
+                        Poll::Ready(None)
+                    }
+                    Some(front) => {
+                        *lifecycle = Lifecycle::Completed(ready);
+                        Poll::Ready(Some(Completion {
+                            data: me
+                                .data
+                                .as_mut()
+                                .cloned()
+                                .take()
+                                .expect("unexpected operation state"),
+                            result: front.0,
+                            flags: front.1,
+                        }))
+                    }
+                }
             }
         }
     }
 }
 
-impl<T> Drop for StrOp<T> {
+impl<T: Clone> Drop for StrOp<T> {
     fn drop(&mut self) {
         let mut inner = self.driver.borrow_mut();
         let lifecycle = match inner.ops.get_mut(self.index) {
@@ -160,16 +204,15 @@ impl<T> Drop for StrOp<T> {
         };
 
         let lifecycle = match lifecycle {
-            driver::Split::Single( _ ) => panic!("expected multi shot op, got single shot op"),
-            driver::Split::Multi( lifecycle ) => lifecycle,
+            driver::Split::Single(_) => panic!("expected multishot op, got single shot op"),
+            driver::Split::Multi(lifecycle) => lifecycle,
         };
 
-
         match lifecycle {
-            Lifecycle::Submitted | Lifecycle::Waiting(_) => {
+            Lifecycle::Submitted(_) | Lifecycle::Waiting(_, _) => {
                 *lifecycle = Lifecycle::Ignored(Box::new(self.data.take()));
             }
-            Lifecycle::Completed(..) => {
+            Lifecycle::Completed(_) => {
                 inner.ops.remove(self.index);
             }
             Lifecycle::Ignored(..) => unreachable!(),
@@ -178,21 +221,57 @@ impl<T> Drop for StrOp<T> {
 }
 
 impl Lifecycle {
+    // complete is called when a completion queue entry has been read.
+    // Returns true, indicating the lifecycle was at ignored state.
     pub(super) fn complete(&mut self, result: io::Result<u32>, flags: u32) -> bool {
+        // Check flags to see if there is more.
+        const MORE: u32 = io_uring::sys::IORING_CQE_F_MORE;
+        if (flags & MORE) != 0 {
+            self.result_more(result, flags & !MORE)
+        } else {
+            self.result_final(result, flags)
+        }
+    }
+    fn result_more(&mut self, result: io::Result<u32>, flags: u32) -> bool {
+        // The MORE flag was found, so no state transition to Completed.
         use std::mem;
 
-        match mem::replace(self, Lifecycle::Submitted) {
-            Lifecycle::Submitted => {
-                *self = Lifecycle::Completed(result, flags);
+        match mem::replace(self, Lifecycle::Submitted(Default::default())) {
+            Lifecycle::Submitted(mut ready) => {
+                ready.push_back((result, flags));
+                *self = Lifecycle::Submitted(ready);
                 false
             }
-            Lifecycle::Waiting(waker) => {
-                *self = Lifecycle::Completed(result, flags);
+            Lifecycle::Waiting(mut ready, waker) => {
+                // TODO for debug, could assert ready is empty.
+                ready.push_back((result, flags));
+                *self = Lifecycle::Submitted(ready);
                 waker.wake();
                 false
             }
             Lifecycle::Ignored(..) => true,
-            Lifecycle::Completed(..) => unreachable!("invalid operation state"),
+            Lifecycle::Completed(..) => unreachable!("invalid operation state"), // 'more' shouldn't be possible once completed
+        }
+    }
+    fn result_final(&mut self, result: io::Result<u32>, flags: u32) -> bool {
+        // The MORE flag was not found, so all transitions are to Completed.
+        use std::mem;
+
+        match mem::replace(self, Lifecycle::Submitted(Default::default())) {
+            Lifecycle::Submitted(mut ready) => {
+                ready.push_back((result, flags));
+                *self = Lifecycle::Completed(ready);
+                false
+            }
+            Lifecycle::Waiting(mut ready, waker) => {
+                // TODO for debug, could assert ready is empty.
+                ready.push_back((result, flags));
+                *self = Lifecycle::Completed(ready);
+                waker.wake();
+                false
+            }
+            Lifecycle::Ignored(..) => true,
+            Lifecycle::Completed(..) => unreachable!("invalid operation state"), // double completed should not be possible
         }
     }
 }
@@ -220,7 +299,7 @@ mod test {
     fn poll_op_once() {
         let (op, driver, data) = init();
         let mut op = task::spawn(op);
-        assert_pending!(op.poll());
+        assert_pending!(op.poll_next());
         assert_eq!(2, Rc::strong_count(&data));
 
         complete(&op, Ok(1));
@@ -232,7 +311,7 @@ mod test {
             result,
             flags,
             data: d,
-        } = assert_ready!(op.poll());
+        } = assert_ready!(op.poll_next()).unwrap();
         assert_eq!(2, Rc::strong_count(&data));
         assert_eq!(1, result.unwrap());
         assert_eq!(0, flags);
@@ -250,13 +329,13 @@ mod test {
     fn poll_op_twice() {
         let (op, driver, ..) = init();
         let mut op = task::spawn(op);
-        assert_pending!(op.poll());
-        assert_pending!(op.poll());
+        assert_pending!(op.poll_next());
+        assert_pending!(op.poll_next());
 
         complete(&op, Ok(1));
 
         assert!(op.is_woken());
-        let Completion { result, flags, .. } = assert_ready!(op.poll());
+        let Completion { result, flags, .. } = assert_ready!(op.poll_next()).unwrap();
         assert_eq!(1, result.unwrap());
         assert_eq!(0, flags);
 
@@ -267,16 +346,16 @@ mod test {
     fn poll_change_task() {
         let (op, driver, ..) = init();
         let mut op = task::spawn(op);
-        assert_pending!(op.poll());
+        assert_pending!(op.poll_next());
 
         let op = op.into_inner();
         let mut op = task::spawn(op);
-        assert_pending!(op.poll());
+        assert_pending!(op.poll_next());
 
         complete(&op, Ok(1));
 
         assert!(op.is_woken());
-        let Completion { result, flags, .. } = assert_ready!(op.poll());
+        let Completion { result, flags, .. } = assert_ready!(op.poll_next()).unwrap();
         assert_eq!(1, result.unwrap());
         assert_eq!(0, flags);
 
@@ -284,14 +363,14 @@ mod test {
     }
 
     #[test]
-    fn complete_before_poll() {
+    fn complete_before_poll_next() {
         let (op, driver, data) = init();
         let mut op = task::spawn(op);
         complete(&op, Ok(1));
         assert_eq!(1, driver.num_operations());
         assert_eq!(2, Rc::strong_count(&data));
 
-        let Completion { result, flags, .. } = assert_ready!(op.poll());
+        let Completion { result, flags, .. } = assert_ready!(op.poll_next()).unwrap();
         assert_eq!(1, result.unwrap());
         assert_eq!(0, flags);
 

@@ -119,8 +119,8 @@ where
         let lifecycle = inner.ops.get_mut(me.index).expect("invalid internal state");
 
         let lifecycle = match lifecycle {
-            driver::Split::Single( lifecycle ) => lifecycle,
-            driver::Split::Multi( _ ) => panic!("expected single shot op, got multi shot op"),
+            driver::Split::Single(lifecycle) => lifecycle,
+            driver::Split::Multi(_) => panic!("expected single shot op, got multishot op"),
         };
 
         match mem::replace(lifecycle, Lifecycle::Submitted) {
@@ -159,8 +159,8 @@ impl<T> Drop for Op<T> {
             None => return,
         };
         let lifecycle = match lifecycle {
-            driver::Split::Single( lifecycle ) => lifecycle,
-            driver::Split::Multi( _ ) => panic!("expected single shot op, got multi shot op"),
+            driver::Split::Single(lifecycle) => lifecycle,
+            driver::Split::Multi(_) => panic!("expected single shot op, got multishot op"),
         };
 
         match lifecycle {

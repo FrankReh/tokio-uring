@@ -1,7 +1,8 @@
 use crate::{
     buf::{IoBuf, IoBufMut},
-    driver::{Op, SharedFd},
+    driver::{Op, SharedFd, StrOp},
 };
+use futures_core::stream::Stream;
 use std::{
     io,
     net::SocketAddr,
@@ -81,6 +82,64 @@ impl Socket {
             })?
         };
         Ok((socket, addr.as_socket()))
+    }
+
+    // Create an async stream of sockets and optional addresses from the open file descriptor.
+    // TODO
+    pub(crate) fn accept_multishot(
+        &self,
+    ) -> impl Stream<Item = io::Result<(Socket, Option<SocketAddr>)>> + '_ {
+        use async_stream::try_stream;
+        use tokio_stream::StreamExt;
+
+        try_stream! {
+            let mut op = StrOp::accept_multishot(&self.fd)?;
+            while let Some(completion) = op.next().await {
+                // TODO this shouldn't quit the stream loop.
+                // Maybe this shouldn't be a try?
+                let fd = completion.result?;
+                let fd = SharedFd::new(fd as i32);
+                let data = completion.data;
+                let socket = Socket { fd };
+                let (_, addr) = unsafe {
+                    socket2::SockAddr::init(move |addr_storage, len| {
+                        *addr_storage = data.socketaddr.0.to_owned();
+                        *len = data.socketaddr.1;
+                        Ok(())
+                    })?
+                };
+                yield (socket, addr.as_socket());
+            }
+        }
+    }
+
+    // Create an async stream of sockets and optional addresses from the open file descriptor. This
+    // is the poor man's version, where the original, single, `accept` operation is used in a loop.
+    // This allows support of a stream for kernels that don't support the `multishot` versions of
+    // the operation yet.
+    pub(crate) fn accept_multishot_slow(
+        &self,
+    ) -> impl Stream<Item = io::Result<(Socket, Option<SocketAddr>)>> + '_ {
+        use async_stream::try_stream;
+
+        try_stream! {
+            loop {
+                let op = Op::accept(&self.fd)?;
+                let completion = op.await;
+                let fd = completion.result?;
+                let fd = SharedFd::new(fd as i32);
+                let data = completion.data;
+                let socket = Socket { fd };
+                let (_, addr) = unsafe {
+                    socket2::SockAddr::init(move |addr_storage, len| {
+                        *addr_storage = data.socketaddr.0.to_owned();
+                        *len = data.socketaddr.1;
+                        Ok(())
+                    })?
+                };
+                yield (socket, addr.as_socket());
+            }
+        }
     }
 
     pub(crate) async fn connect(&self, socket_addr: socket2::SockAddr) -> io::Result<()> {

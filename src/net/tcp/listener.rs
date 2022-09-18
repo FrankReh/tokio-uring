@@ -2,6 +2,8 @@ use super::TcpStream;
 use crate::driver::Socket;
 use std::{io, net::SocketAddr};
 
+use futures_core::Stream;
+
 /// A TCP socket server, listening for connections.
 ///
 /// You can accept a new connection by using the [`accept`](`TcpListener::accept`)
@@ -63,5 +65,47 @@ impl TcpListener {
             io::Error::new(io::ErrorKind::Other, "Could not get socket IP address")
         })?;
         Ok((stream, socket_addr))
+    }
+
+    /// TODO missing doc
+    /// This is the slow version of the accept_multishot operation, where the implementation is
+    /// a sequence of single accept operations under the hood.
+    pub fn accept_multishot(&self) -> impl Stream<Item = io::Result<(TcpStream, SocketAddr)>> + '_ {
+        use async_stream::try_stream;
+        use tokio::pin;
+        use tokio_stream::StreamExt;
+        try_stream! {
+            let s = self.inner.accept_multishot();
+            pin!(s);
+            while let Some((socket, socket_addr)) = s.try_next().await? {
+                let stream = TcpStream { inner: socket };
+                let socket_addr = socket_addr.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::Other, "Could not get socket IP address")
+                })?;
+                yield (stream, socket_addr)
+            }
+        }
+    }
+
+    /// TODO missing doc
+    /// This is the slow version of the accept_multishot operation, where the implementation is
+    /// a sequence of single accept operations under the hood.
+    pub fn accept_multishot_slow(
+        &self,
+    ) -> impl Stream<Item = io::Result<(TcpStream, SocketAddr)>> + '_ {
+        use async_stream::try_stream;
+        use tokio::pin;
+        use tokio_stream::StreamExt;
+        try_stream! {
+            let s = self.inner.accept_multishot_slow();
+            pin!(s);
+            while let Some((socket, socket_addr)) = s.try_next().await? {
+                let stream = TcpStream { inner: socket };
+                let socket_addr = socket_addr.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::Other, "Could not get socket IP address")
+                })?;
+                yield (stream, socket_addr)
+            }
+        }
     }
 }
