@@ -52,7 +52,9 @@ impl Runtime {
         let rt = tokio::runtime::Builder::new_current_thread()
             .on_thread_park(|| {
                 CURRENT.with(|x| {
-                    let _ = RefCell::borrow_mut(x).uring.submit();
+                    if let Err(e) = RefCell::borrow_mut(x).uring.submit() {
+                        panic!("within the on_thread_park callback, uring.submit returned {}", e);
+                    }
                 });
             })
             .enable_all()

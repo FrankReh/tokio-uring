@@ -70,7 +70,9 @@ impl<T> Op<T> {
 
             // If the submission queue is full, flush it to the kernel
             if inner.uring.submission().is_full() {
-                inner.submit()?;
+                if let Err(e) = inner.submit() {
+                    panic!("while submission was found full, inner.submit returned {}", e);
+                }
             }
 
             // Create the operation

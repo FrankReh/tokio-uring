@@ -83,7 +83,7 @@ impl<T: Clone> StrOp<T> {
     ///
     /// `state` is stored during the operation tracking any state submitted to
     /// the kernel.
-    pub(super) fn submit_with<F>(data: T, f: F) -> io::Result<StrOp<T>>
+    pub(super) fn submit_with<F>(data: T, f: F) -> io::Result<StrOp<T>> // TODO Could get rid of this io::Result
     where
         F: FnOnce(&mut T) -> squeue::Entry,
     {
@@ -93,7 +93,9 @@ impl<T: Clone> StrOp<T> {
 
             // If the submission queue is full, flush it to the kernel
             if inner.uring.submission().is_full() {
-                inner.submit()?;
+                if let Err(e) = inner.submit() {
+                    panic!("while submission was found full, inner.submit returned {}", e);
+                }
             }
 
             // Create the operation
