@@ -26,23 +26,31 @@ fn main() -> io::Result<()> {
         for _ in 0..1 {
             let listener = listener.clone();
             let tasks2 = tasks.clone();
-            // TODO cleanup let task: JoinHandle<io::Result<()>> = tokio::task::spawn_local(async move {}
-            //
+            // TODO what's the difference between these two spawns? What does spawn_local do in a
+            // current-thread runtime?
             // let task: JoinHandle<io::Result<()>> = tokio::task::spawn_local(async move {}
             let task: JoinHandle<io::Result<()>> = tokio_uring::spawn(async move {
-                // TODO this could return an io::Result<Stream<...>, io::Error>.
-                let (stream, _cancelid) = listener.accept_multishot()?;
+                // accept_multishot isn't possible now. What to write about it?
+                let (stream, _cancelid) = listener.accept_multishot().unwrap();
                 pin!(stream);
-                while let Some((tcp_stream, _)) = stream.try_next().await? {
-                    let task2: JoinHandle<io::Result<()>> = tokio_uring::spawn(async move {
-                        let (result, _) = tcp_stream.write(RESPONSE).await;
+                while let Some(next) = stream.next().await {
+                    match next {
+                        Err(e) => {
+                            // Just print the error and continue.
+                            println!("accept_multishot stream.next returned {}", e);
+                        },
+                        Ok((tcp_stream, _)) => {
+                            let task2: JoinHandle<io::Result<()>> = tokio_uring::spawn(async move {
+                                let (result, _) = tcp_stream.write(RESPONSE).await;
 
-                        if let Err(err) = result {
-                            eprintln!("Client connection failed: {}", err);
-                        }
-                        Ok(())
-                    });
-                    tasks2.lock().unwrap().push_back(task2);
+                                if let Err(err) = result {
+                                    eprintln!("Client connection failed: {}", err);
+                                }
+                                Ok(())
+                            });
+                            tasks2.lock().unwrap().push_back(task2);
+                        },
+                    }
                 }
                 Ok(())
             });
