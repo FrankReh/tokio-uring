@@ -197,14 +197,32 @@ where
                     }
                     Some(front) => {
                         *lifecycle = Lifecycle::Completed(ready);
-                        let (mut result, flags) = front;
+                        let (result, flags) = front;
                         if let Err(ref e) = result {
                             if let Some(raw_os_err) = e.raw_os_error() {
                                 if raw_os_err == libc::ECANCELED {
-                                    // TODO also check that the Index had been canceled on purpose.
-                                    // If it hasn't been, we want the ECANCELED error to percolate
-                                    // up.
-                                    result = Ok(0);
+                                    // If index had been canceled through the cancel mechanism,
+                                    // was_canceled(), absorb this result, so the caller sees no
+                                    // error. This is most likely the last result that was pushed
+                                    // onto the ready fifo as the operation has been canceled but
+                                    // on the off chance the kernel sent the canceled for another
+                                    // reason and the operation is still ongoing, flip the
+                                    // was_canceled flag back so the caller's stream loop will be
+                                    // given any subsequent cancel response.
+                                    //
+                                    // The fifo entry could have been given a 'last' bool to know
+                                    // if the stream was being closed with this last result, but
+                                    // that seemed like overkill.
+                                    if me.index.was_canceled() {
+                                        // Flip the canceled mark in case this isn't the last entry
+                                        // so the next time through, the error would be passed to
+                                        // the caller.
+                                        me.index.clear_was_canceled();
+
+                                        // Consume this result and have the scheduler ask us again.
+                                        cx.waker().wake_by_ref();
+                                        return Poll::Pending;
+                                    }
                                 }
                             }
                         }
@@ -259,9 +277,9 @@ impl<T: Clone> Drop for StrOp<T> {
 }
 
 impl Lifecycle {
-    // complete is called when a completion queue entry has been read.
+    // Called when a completion queue entry has been read.
     // Returns true, indicating the lifecycle was at ignored state.
-    pub(super) fn complete(&mut self, result: io::Result<u32>, flags: u32) -> bool {
+    pub(super) fn result(&mut self, result: io::Result<u32>, flags: u32) -> bool {
         // Check flags to see if there is more.
         const MORE: u32 = io_uring::sys::IORING_CQE_F_MORE;
         if (flags & MORE) != 0 {
@@ -448,15 +466,19 @@ mod test {
         (op, driver, data)
     }
 
+    /* TODO is this needed?
     fn complete(op: &StrOp<Rc<()>>, result: io::Result<u32>) {
         op.driver
             .borrow_mut()
             .ops
             .complete(op.index.index().unwrap(), result, 0);
     }
+    */
 
+    /* TODO is this needed?
     fn release(driver: crate::driver::Driver) {
         // Clear ops, we aren't really doing any I/O
         driver.inner.borrow_mut().ops.0.clear();
     }
+    */
 }

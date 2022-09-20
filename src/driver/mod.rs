@@ -71,7 +71,7 @@ impl Split {
     pub(super) fn complete(&mut self, result: io::Result<u32>, flags: u32) -> bool {
         match self {
             Split::Single(lifecycle) => lifecycle.complete(result, flags),
-            Split::Multi(lifecycle) => lifecycle.complete(result, flags),
+            Split::Multi(lifecycle) => lifecycle.result(result, flags),
         }
     }
 }
