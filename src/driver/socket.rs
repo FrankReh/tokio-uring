@@ -1,3 +1,4 @@
+use crate::driver::cancellable;
 use crate::{
     buf::{IoBuf, IoBufMut},
     driver::{Op, SharedFd, StrOp},
@@ -88,7 +89,10 @@ impl Socket {
     // TODO
     pub(crate) fn accept_multishot(
         &self,
-    ) -> io::Result<(impl Stream<Item = io::Result<(Socket, Option<SocketAddr>)>> + '_, u64)> {
+    ) -> io::Result<(
+        impl Stream<Item = io::Result<(Socket, Option<SocketAddr>)>> + '_,
+        cancellable::Ptr,
+    )> {
         use async_stream::try_stream;
         use tokio_stream::StreamExt;
 
@@ -99,25 +103,28 @@ impl Socket {
         // Should it be cancellable even if the operation hasn't been sent yet?
         //let mut op = StrOp::accept_multishot(&self.fd)?; // TODO this step could have failed - the submission step could have failed. Wrong args or feature not supported.
         let mut op = StrOp::accept_multishot(&self.fd)?;
-        Ok((try_stream! {
-            while let Some(completion) = op.next().await {
-                // TODO this shouldn't quit the stream loop.
-                // Maybe this shouldn't be a try?
-                let fd = completion.result?;
-                let fd = SharedFd::new(fd as i32);
-                let data = completion.data;
-                let socket = Socket { fd };
-                let (_, addr) = unsafe {
-                    socket2::SockAddr::init(move |addr_storage, len| {
-                        *addr_storage = data.socketaddr.0.to_owned();
-                        *len = data.socketaddr.1;
-                        Ok(())
-                    })?
-                };
-                yield (socket, addr.as_socket());
-            }
-        },
-        0))
+        let cancel = op.cancel_clone();
+        Ok((
+            try_stream! {
+                while let Some(completion) = op.next().await {
+                    // TODO this shouldn't quit the stream loop.
+                    // Maybe this shouldn't be a try?
+                    let fd = completion.result?;
+                    let fd = SharedFd::new(fd as i32);
+                    let data = completion.data;
+                    let socket = Socket { fd };
+                    let (_, addr) = unsafe {
+                        socket2::SockAddr::init(move |addr_storage, len| {
+                            *addr_storage = data.socketaddr.0.to_owned();
+                            *len = data.socketaddr.1;
+                            Ok(())
+                        })?
+                    };
+                    yield (socket, addr.as_socket());
+                }
+            },
+            cancel,
+        ))
     }
 
     // Create an async stream of sockets and optional addresses from the open file descriptor. This

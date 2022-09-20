@@ -10,6 +10,7 @@ use tokio_stream::Stream;
 use io_uring::squeue;
 
 use crate::driver;
+use crate::driver::cancellable;
 
 /// In-flight operation
 pub(crate) struct StrOp<T: 'static + Clone> {
@@ -17,7 +18,8 @@ pub(crate) struct StrOp<T: 'static + Clone> {
     pub(super) driver: Rc<RefCell<driver::Inner>>,
 
     // Operation index in the slab
-    pub(super) index: usize,
+    //pub(super) index: usize,
+    pub(super) index: cancellable::Cancellable,
 
     // Per-operation data
     data: Option<T>,
@@ -74,7 +76,8 @@ impl<T: Clone> StrOp<T> {
     fn new(data: T, inner: &mut driver::Inner, inner_rc: &Rc<RefCell<driver::Inner>>) -> StrOp<T> {
         StrOp {
             driver: inner_rc.clone(),
-            index: inner.ops.insert_multishot(),
+            //index: inner.ops.insert_multishot(),
+            index: cancellable::Cancellable::new(inner.ops.insert_multishot()),
             data: Some(data),
         }
     }
@@ -83,7 +86,8 @@ impl<T: Clone> StrOp<T> {
     ///
     /// `state` is stored during the operation tracking any state submitted to
     /// the kernel.
-    pub(super) fn submit_with<F>(data: T, f: F) -> io::Result<StrOp<T>> // TODO Could get rid of this io::Result
+    pub(super) fn submit_with<F>(data: T, f: F) -> io::Result<StrOp<T>>
+    // TODO Could get rid of this io::Result
     where
         F: FnOnce(&mut T) -> squeue::Entry,
     {
@@ -94,7 +98,10 @@ impl<T: Clone> StrOp<T> {
             // If the submission queue is full, flush it to the kernel
             if inner.uring.submission().is_full() {
                 if let Err(e) = inner.submit() {
-                    panic!("while submission was found full, inner.submit returned {}", e);
+                    panic!(
+                        "while submission was found full, inner.submit returned {}",
+                        e
+                    );
                 }
             }
 
@@ -102,7 +109,8 @@ impl<T: Clone> StrOp<T> {
             let mut op = StrOp::new(data, inner, inner_rc);
 
             // Configure the SQE
-            let sqe = f(op.data.as_mut().unwrap()).user_data(op.index as _);
+            //let sqe = f(op.data.as_mut().unwrap()).user_data(op.index as _);
+            let sqe = f(op.data.as_mut().unwrap()).user_data(op.index.index().unwrap() as _);
 
             {
                 let mut sq = inner.uring.submission();
@@ -115,6 +123,10 @@ impl<T: Clone> StrOp<T> {
 
             Ok(op)
         })
+    }
+
+    pub(super) fn cancel_clone(&mut self) -> cancellable::Ptr {
+        self.index.cancel_clone()
     }
 }
 
@@ -129,7 +141,11 @@ where
 
         let me = &mut *self;
         let mut inner = me.driver.borrow_mut();
-        let lifecycle = inner.ops.get_mut(me.index).expect("invalid internal state");
+        // TODO handle case where index has been cancelled and this stream was polled anyway.
+        let lifecycle = inner
+            .ops
+            .get_mut(me.index.index().unwrap())
+            .expect("invalid internal state");
 
         let lifecycle = match lifecycle {
             driver::Split::Single(_) => panic!("expected multishot op, got single shot op"),
@@ -174,8 +190,9 @@ where
                 // otherwise return front as next stream item and keep lifecycle at Completed.
                 match ready.pop_front() {
                     None => {
-                        inner.ops.remove(me.index);
-                        me.index = usize::MAX;
+                        //inner.ops.remove(me.index);
+                        //me.index = usize::MAX;
+                        inner.ops.remove(me.index.take_index().unwrap());
                         Poll::Ready(None)
                     }
                     Some(front) => {
@@ -200,7 +217,12 @@ where
 impl<T: Clone> Drop for StrOp<T> {
     fn drop(&mut self) {
         let mut inner = self.driver.borrow_mut();
-        let lifecycle = match inner.ops.get_mut(self.index) {
+        let index = match self.index.index() {
+            Some(index) => index,
+            None => return,
+        };
+        //let lifecycle = match inner.ops.get_mut(self.index) {
+        let lifecycle = match inner.ops.get_mut(index) {
             Some(lifecycle) => lifecycle,
             None => return,
         };
@@ -215,7 +237,9 @@ impl<T: Clone> Drop for StrOp<T> {
                 *lifecycle = Lifecycle::Ignored(Box::new(self.data.take()));
             }
             Lifecycle::Completed(_) => {
-                inner.ops.remove(self.index);
+                // TODO perhaps use take_index above
+                //inner.ops.remove(self.index);
+                inner.ops.remove(index);
             }
             Lifecycle::Ignored(..) => unreachable!(),
         }
@@ -385,7 +409,7 @@ mod test {
     #[test]
     fn complete_after_drop() {
         let (op, driver, data) = init();
-        let index = op.index;
+        let index = op.index.index().unwrap();
         drop(op);
 
         assert_eq!(2, Rc::strong_count(&data));
@@ -413,7 +437,10 @@ mod test {
     }
 
     fn complete(op: &StrOp<Rc<()>>, result: io::Result<u32>) {
-        op.driver.borrow_mut().ops.complete(op.index, result, 0);
+        op.driver
+            .borrow_mut()
+            .ops
+            .complete(op.index.index().unwrap(), result, 0);
     }
 
     fn release(driver: crate::driver::Driver) {

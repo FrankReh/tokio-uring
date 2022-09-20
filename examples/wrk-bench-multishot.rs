@@ -30,25 +30,26 @@ fn main() -> io::Result<()> {
             // let task: JoinHandle<io::Result<()>> = tokio::task::spawn_local(async move {}
             let task: JoinHandle<io::Result<()>> = tokio_uring::spawn(async move {
                 // accept_multishot isn't possible now. What to write about it?
-                let (stream, _cancelid) = listener.accept_multishot().unwrap();
+                let (stream, _cancel) = listener.accept_multishot().unwrap();
                 pin!(stream);
                 while let Some(next) = stream.next().await {
                     match next {
                         Err(e) => {
                             // Just print the error and continue.
                             println!("accept_multishot stream.next returned {}", e);
-                        },
+                        }
                         Ok((tcp_stream, _)) => {
-                            let task2: JoinHandle<io::Result<()>> = tokio_uring::spawn(async move {
-                                let (result, _) = tcp_stream.write(RESPONSE).await;
+                            let task2: JoinHandle<io::Result<()>> =
+                                tokio_uring::spawn(async move {
+                                    let (result, _) = tcp_stream.write(RESPONSE).await;
 
-                                if let Err(err) = result {
-                                    eprintln!("Client connection failed: {}", err);
-                                }
-                                Ok(())
-                            });
+                                    if let Err(err) = result {
+                                        eprintln!("Client connection failed: {}", err);
+                                    }
+                                    Ok(())
+                                });
                             tasks2.lock().unwrap().push_back(task2);
-                        },
+                        }
                     }
                 }
                 Ok(())

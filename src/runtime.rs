@@ -53,7 +53,10 @@ impl Runtime {
             .on_thread_park(|| {
                 CURRENT.with(|x| {
                     if let Err(e) = RefCell::borrow_mut(x).uring.submit() {
-                        panic!("within the on_thread_park callback, uring.submit returned {}", e);
+                        panic!(
+                            "within the on_thread_park callback, uring.submit returned {}",
+                            e
+                        );
                     }
                 });
             })

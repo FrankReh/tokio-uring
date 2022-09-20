@@ -2,6 +2,7 @@ use super::TcpStream;
 use crate::driver::Socket;
 use std::{io, net::SocketAddr};
 
+use crate::driver::cancellable;
 use futures_core::Stream;
 
 /// A TCP socket server, listening for connections.
@@ -70,22 +71,29 @@ impl TcpListener {
     /// TODO missing doc
     /// This is the slow version of the accept_multishot operation, where the implementation is
     /// a sequence of single accept operations under the hood.
-    pub fn accept_multishot(&self) -> io::Result<(impl Stream<Item = io::Result<(TcpStream, SocketAddr)>> + '_, u64)> {
+    pub fn accept_multishot(
+        &self,
+    ) -> io::Result<(
+        impl Stream<Item = io::Result<(TcpStream, SocketAddr)>> + '_,
+        cancellable::Ptr,
+    )> {
         use async_stream::try_stream;
         use tokio::pin;
         use tokio_stream::StreamExt;
-        let (s, cancelid) = self.inner.accept_multishot()?;
-        Ok((try_stream! {
-            pin!(s);
-            while let Some((socket, socket_addr)) = s.try_next().await? {
-                let stream = TcpStream { inner: socket };
-                let socket_addr = socket_addr.ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::Other, "Could not get socket IP address")
-                })?;
-                yield (stream, socket_addr)
-            }
-        },
-        cancelid))
+        let (s, cancel) = self.inner.accept_multishot()?;
+        Ok((
+            try_stream! {
+                pin!(s);
+                while let Some((socket, socket_addr)) = s.try_next().await? {
+                    let stream = TcpStream { inner: socket };
+                    let socket_addr = socket_addr.ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::Other, "Could not get socket IP address")
+                    })?;
+                    yield (stream, socket_addr)
+                }
+            },
+            cancel,
+        ))
     }
 
     /// TODO missing doc
