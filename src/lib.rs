@@ -80,6 +80,8 @@ pub mod net;
 
 pub use runtime::spawn;
 
+pub use driver::cancellable::Ptr;
+
 use std::future::Future;
 
 /// Start an `io_uring` enabled Tokio runtime.

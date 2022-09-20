@@ -197,6 +197,18 @@ where
                     }
                     Some(front) => {
                         *lifecycle = Lifecycle::Completed(ready);
+                        let (mut result, flags) = front;
+                        if let Err(ref e) = result {
+                            if let Some(raw_os_err) = e.raw_os_error() {
+                                if raw_os_err == libc::ECANCELED {
+                                    // TODO also check that the Index had been canceled on purpose.
+                                    // If it hasn't been, we want the ECANCELED error to percolate
+                                    // up.
+                                    result = Ok(0);
+                                }
+                            }
+                        }
+
                         Poll::Ready(Some(Completion {
                             data: me
                                 .data
@@ -204,8 +216,8 @@ where
                                 .cloned()
                                 .take()
                                 .expect("unexpected operation state"),
-                            result: front.0,
-                            flags: front.1,
+                            result,
+                            flags,
                         }))
                     }
                 }

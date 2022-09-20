@@ -123,6 +123,8 @@ impl Inner {
         cq.sync();
 
         for cqe in cq {
+            // TODO fsr: not sure about this. What was triggering this cancellation action?
+            // Check the git log for when this was introduced.
             if cqe.user_data() == u64::MAX {
                 // Result of the cancellation action. There isn't anything we
                 // need to do here. We must wait for the CQE for the operation

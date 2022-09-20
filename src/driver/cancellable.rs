@@ -65,7 +65,7 @@ impl Cancellable {
 }
 
 /// TODO comment
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Ptr(Rc<Mutex<Option<usize>>>);
 
 impl Ptr {
@@ -105,5 +105,45 @@ impl Ptr {
             }
             None => None,
         }
+    }
+
+    /// TODO comment
+    pub async fn async_cancel(&mut self) {
+        println!("async_cancel called on {:?}", self);
+        match self.index() {
+            Some(index) => {
+                let op = Op::async_cancel(index).unwrap(); // TODO don't expect an error
+                let completion = op.await;
+                println!("async_cancel completion {:?}", completion);
+                // Ignore completion.
+            }
+            None => (),
+        }
+    }
+}
+
+// TODO improve comment
+// Stuff for the AsyncCancel operation, which for now, does not need to be made public because the
+// slab index hasn't been made public. In the future, there could be an AsyncCancel operation
+// defined for file descriptors and since file desciptors are made public, there could be a reason
+// for supporting that publicly.
+
+use crate::driver::Op;
+use std::io;
+
+#[derive(Debug)]
+pub(crate) struct AsyncCancel {
+    index: usize,
+}
+
+impl Op<AsyncCancel> {
+    pub(crate) fn async_cancel(index: usize) -> io::Result<Op<AsyncCancel>> {
+        use io_uring::opcode;
+
+        Op::submit_with(AsyncCancel { index }, |ac| {
+            let index = ac.index;
+
+            opcode::AsyncCancel::new(index as _).build()
+        })
     }
 }
