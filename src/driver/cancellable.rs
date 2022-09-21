@@ -3,62 +3,81 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 /// TODO comment
-pub(crate) enum Index {
-    Base(usize),
-    Latched(Handle),
+pub(crate) enum Flat {
+    Idx(usize),
     Taken,
 }
 
-/// TODO comment
-impl Index {
-    /// TODO comment
-    pub(crate) fn new(index: usize) -> Self {
-        Index::Base(index)
-    }
-
+impl Flat {
     /// Get the index without changing anything about the type.
     pub(crate) fn index(&self) -> Option<usize> {
         match self {
-            Index::Base(index) => Some(*index),
-            Index::Latched(handle) => handle.index(),
-            Index::Taken => None,
-        }
-    }
-
-    pub(crate) fn was_canceled(&self) -> bool {
-        match self {
-            Index::Base(_) => false,
-            Index::Latched(handle) => handle.was_canceled(),
-            Index::Taken => false,
-        }
-    }
-
-    pub(crate) fn clear_was_canceled(&self) {
-        match self {
-            Index::Base(_) => {}
-            Index::Latched(handle) => handle.clear_was_canceled(),
-            Index::Taken => {}
+            Flat::Idx(index) => Some(*index),
+            Flat::Taken => None,
         }
     }
 
     /// Take the index with the intention of removing the item from the slab.
     pub(crate) fn take_index(&mut self) -> Option<usize> {
         match self {
-            Index::Base(index) => {
+            Flat::Idx(index) => {
                 let index = *index;
-                *self = Index::Taken;
+                *self = Flat::Taken;
                 Some(index)
             }
+            Flat::Taken => None,
+        }
+    }
+}
+
+pub(crate) enum Index {
+    Unlatched(Flat),
+    Latched(Handle),
+}
+
+/// TODO comment
+impl Index {
+    /// TODO comment
+    pub(crate) fn new(index: usize) -> Self {
+        Index::Unlatched(Flat::Idx(index))
+    }
+
+    /// Get the index without changing anything about the type.
+    pub(crate) fn index(&self) -> Option<usize> {
+        match self {
+            Index::Unlatched(flat) => flat.index(),
+            Index::Latched(handle) => handle.index(),
+        }
+    }
+
+    pub(crate) fn was_canceled(&self) -> bool {
+        match self {
+            Index::Unlatched(_) => false,
+
+            Index::Latched(handle) => handle.was_canceled(),
+        }
+    }
+
+    pub(crate) fn clear_was_canceled(&self) {
+        match self {
+            Index::Unlatched(_) => {}
+            Index::Latched(handle) => handle.clear_was_canceled(),
+        }
+    }
+
+    /// Take the index with the intention of removing the item from the slab.
+    pub(crate) fn take_index(&mut self) -> Option<usize> {
+        match self {
+            Index::Unlatched(flat) => flat.take_index(),
             Index::Latched(handle) => handle.take_index(),
-            Index::Taken => None,
         }
     }
 
     /// TODO comment
     pub(crate) fn cancel_handle(&mut self) -> Handle {
         match self {
-            Index::Base(index) => {
-                let handle = Handle::new_index(*index);
+            Index::Unlatched(ref flat) => {
+                let handle = Handle::new(flat);
                 *self = Index::Latched(handle.clone());
                 handle
             }
@@ -66,14 +85,6 @@ impl Index {
             Index::Latched(handle) => {
                 // When we already have a latched handle, simply return a clone of it.
                 handle.clone()
-            }
-            Index::Taken => {
-                // When the op is already done and only now a cancel_handle is requested, create
-                // one but create it already in the done state and switch ourself to it to avoid
-                // allocating more if cancel_handle is called again.
-                let handle = Handle::new_done();
-                *self = Index::Latched(handle.clone());
-                handle
             }
         }
     }
@@ -85,13 +96,11 @@ pub struct Handle(Rc<Mutex<Option<(usize, bool)>>>);
 
 impl Handle {
     /// TODO comment
-    fn new_index(index: usize) -> Self {
-        Self(Rc::new(Mutex::new(Some((index, false)))))
-    }
-
-    /// TODO comment
-    fn new_done() -> Self {
-        Self(Rc::new(Mutex::new(None)))
+    fn new(flat: &Flat) -> Self {
+        match *flat {
+            Flat::Idx(index) => Self(Rc::new(Mutex::new(Some((index, false))))),
+            Flat::Taken => Self(Rc::new(Mutex::new(None))),
+        }
     }
 
     /// TODO comment
