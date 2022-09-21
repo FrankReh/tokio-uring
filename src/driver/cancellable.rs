@@ -3,78 +3,77 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 /// TODO comment
-pub(crate) enum Cancellable {
+pub(crate) enum Index {
     Base(usize),
-    Ptr(Handle),
-    Cancelled,
+    Latched(Handle),
+    Taken,
 }
 
 /// TODO comment
-impl Cancellable {
+impl Index {
     /// TODO comment
     pub(crate) fn new(index: usize) -> Self {
-        Cancellable::Base(index)
+        Index::Base(index)
     }
 
     /// Get the index without changing anything about the type.
     pub(crate) fn index(&self) -> Option<usize> {
         match self {
-            Cancellable::Base(index) => Some(*index),
-            Cancellable::Ptr(ptr) => ptr.index(),
-            Cancellable::Cancelled => None,
+            Index::Base(index) => Some(*index),
+            Index::Latched(handle) => handle.index(),
+            Index::Taken => None,
         }
     }
 
     pub(crate) fn was_canceled(&self) -> bool {
         match self {
-            Cancellable::Base(_) => false,
-            Cancellable::Ptr(ptr) => ptr.was_canceled(),
-            Cancellable::Cancelled => false,
+            Index::Base(_) => false,
+            Index::Latched(handle) => handle.was_canceled(),
+            Index::Taken => false,
         }
     }
 
     pub(crate) fn clear_was_canceled(&self) {
         match self {
-            Cancellable::Base(_) => {}
-            Cancellable::Ptr(ptr) => ptr.clear_was_canceled(),
-            Cancellable::Cancelled => {}
+            Index::Base(_) => {}
+            Index::Latched(handle) => handle.clear_was_canceled(),
+            Index::Taken => {}
         }
     }
 
     /// Take the index with the intention of removing the item from the slab.
     pub(crate) fn take_index(&mut self) -> Option<usize> {
         match self {
-            Cancellable::Base(index) => {
+            Index::Base(index) => {
                 let index = *index;
-                *self = Cancellable::Cancelled;
+                *self = Index::Taken;
                 Some(index)
             }
-            Cancellable::Ptr(ptr) => ptr.take_index(),
-            Cancellable::Cancelled => None,
+            Index::Latched(handle) => handle.take_index(),
+            Index::Taken => None,
         }
     }
 
     /// TODO comment
-    pub(crate) fn cancel_clone(&mut self) -> Handle {
+    pub(crate) fn cancel_handle(&mut self) -> Handle {
         match self {
-            Cancellable::Base(index) => {
-                let ptr = Handle::new_index(*index);
-                *self = Cancellable::Ptr(ptr.clone());
-                ptr
+            Index::Base(index) => {
+                let handle = Handle::new_index(*index);
+                *self = Index::Latched(handle.clone());
+                handle
             }
 
-            Cancellable::Ptr(ptr) => {
-                // When we already have a cancel_clone ptr, return it,
-                // but incremented.
-                ptr.clone()
+            Index::Latched(handle) => {
+                // When we already have a latched handle, simply return a clone of it.
+                handle.clone()
             }
-            Cancellable::Cancelled => {
-                // When the op is already done or cancelled and only now a cancel_clone is
-                // asked for, create one but create it already in the done state and switch
-                // ourself to it to avoid allocating more if cancel_clone is called again.
-                let ptr = Handle::new_done();
-                *self = Cancellable::Ptr(ptr.clone());
-                ptr
+            Index::Taken => {
+                // When the op is already done and only now a cancel_handle is requested, create
+                // one but create it already in the done state and switch ourself to it to avoid
+                // allocating more if cancel_handle is called again.
+                let handle = Handle::new_done();
+                *self = Index::Latched(handle.clone());
+                handle
             }
         }
     }

@@ -19,7 +19,7 @@ pub(crate) struct StrOp<T: 'static + Clone> {
 
     // Operation index in the slab
     //pub(super) index: usize,
-    pub(super) index: cancellable::Cancellable,
+    pub(super) index: cancellable::Index,
 
     // Per-operation data
     data: Option<T>,
@@ -77,7 +77,7 @@ impl<T: Clone> StrOp<T> {
         StrOp {
             driver: inner_rc.clone(),
             //index: inner.ops.insert_multishot(),
-            index: cancellable::Cancellable::new(inner.ops.insert_multishot()),
+            index: cancellable::Index::new(inner.ops.insert_multishot()),
             data: Some(data),
         }
     }
@@ -125,8 +125,8 @@ impl<T: Clone> StrOp<T> {
         })
     }
 
-    pub(super) fn cancel_clone(&mut self) -> cancellable::Handle {
-        self.index.cancel_clone()
+    pub(super) fn cancel_handle(&mut self) -> cancellable::Handle {
+        self.index.cancel_handle()
     }
 }
 
