@@ -1,6 +1,4 @@
-use std::ops::Deref;
-use std::rc::Rc;
-use std::sync::Mutex;
+use std::{ops::Deref, rc::Rc, sync::Mutex};
 
 /// A Flat is created with a usize index or already in the Taken state.
 ///
