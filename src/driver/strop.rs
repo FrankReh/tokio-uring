@@ -247,7 +247,7 @@ where
 impl<T: Clone> Drop for StrOp<T> {
     fn drop(&mut self) {
         let mut inner = self.driver.borrow_mut();
-        let index = match self.index.index() {
+        let index = match self.index.take_index() {
             Some(index) => index,
             None => return,
         };
