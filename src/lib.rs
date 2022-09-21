@@ -80,7 +80,7 @@ pub mod net;
 
 pub use runtime::spawn;
 
-pub use driver::cancellable::Ptr;
+pub use driver::cancellable::Handle;
 
 use std::future::Future;
 

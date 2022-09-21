@@ -5,7 +5,7 @@ use std::sync::Mutex;
 /// TODO comment
 pub(crate) enum Cancellable {
     Base(usize),
-    Ptr(Ptr),
+    Ptr(Handle),
     Cancelled,
 }
 
@@ -55,10 +55,10 @@ impl Cancellable {
     }
 
     /// TODO comment
-    pub(crate) fn cancel_clone(&mut self) -> Ptr {
+    pub(crate) fn cancel_clone(&mut self) -> Handle {
         match self {
             Cancellable::Base(index) => {
-                let ptr = Ptr::new_index(*index);
+                let ptr = Handle::new_index(*index);
                 *self = Cancellable::Ptr(ptr.clone());
                 ptr
             }
@@ -72,7 +72,7 @@ impl Cancellable {
                 // When the op is already done or cancelled and only now a cancel_clone is
                 // asked for, create one but create it already in the done state and switch
                 // ourself to it to avoid allocating more if cancel_clone is called again.
-                let ptr = Ptr::new_done();
+                let ptr = Handle::new_done();
                 *self = Cancellable::Ptr(ptr.clone());
                 ptr
             }
@@ -82,9 +82,9 @@ impl Cancellable {
 
 /// TODO comment
 #[derive(Clone, Debug)]
-pub struct Ptr(Rc<Mutex<Option<(usize, bool)>>>);
+pub struct Handle(Rc<Mutex<Option<(usize, bool)>>>);
 
-impl Ptr {
+impl Handle {
     /// TODO comment
     fn new_index(index: usize) -> Self {
         Self(Rc::new(Mutex::new(Some((index, false)))))
@@ -102,7 +102,7 @@ impl Ptr {
     }
 
     /// Called from the cancel flow. Provide the slab index of the operation to be canceled
-    /// and mark this Ptr has having been used to cancel the option. That mark can then
+    /// and mark this Handle has having been used to cancel the option. That mark can then
     /// be used by poll_next to filter out the ECANCELED error and return a successful result of 0
     /// ... Wait a minute - that should not be returned by the stream.
     ///

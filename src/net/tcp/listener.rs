@@ -75,7 +75,7 @@ impl TcpListener {
         &self,
     ) -> io::Result<(
         impl Stream<Item = io::Result<(TcpStream, SocketAddr)>> + '_,
-        cancellable::Ptr,
+        cancellable::Handle,
     )> {
         use async_stream::try_stream;
         use tokio::pin;

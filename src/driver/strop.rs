@@ -125,7 +125,7 @@ impl<T: Clone> StrOp<T> {
         })
     }
 
-    pub(super) fn cancel_clone(&mut self) -> cancellable::Ptr {
+    pub(super) fn cancel_clone(&mut self) -> cancellable::Handle {
         self.index.cancel_clone()
     }
 }
