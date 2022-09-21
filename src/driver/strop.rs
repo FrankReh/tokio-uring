@@ -251,7 +251,6 @@ impl<T: Clone> Drop for StrOp<T> {
             Some(index) => index,
             None => return,
         };
-        //let lifecycle = match inner.ops.get_mut(self.index) {
         let lifecycle = match inner.ops.get_mut(index) {
             Some(lifecycle) => lifecycle,
             None => return,
@@ -264,11 +263,14 @@ impl<T: Clone> Drop for StrOp<T> {
 
         match lifecycle {
             Lifecycle::Submitted(_) | Lifecycle::Waiting(_, _) => {
+                // TODO fsr: understand why this transition is being made and why the index is not
+                // being removed from the slab. The StrOp is being dropped so there will be nothing
+                // left to pull data from, except this lifecycle which is still in the slab. Why is
+                // the life of the data being extended in the slab if there is nothing else to
+                // access it?
                 *lifecycle = Lifecycle::Ignored(Box::new(self.data.take()));
             }
             Lifecycle::Completed(_) => {
-                // TODO perhaps use take_index above
-                //inner.ops.remove(self.index);
                 inner.ops.remove(index);
             }
             Lifecycle::Ignored(..) => unreachable!(),
