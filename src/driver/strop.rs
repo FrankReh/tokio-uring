@@ -370,12 +370,12 @@ mod test {
             flags,
             data: d,
         } = assert_ready!(op.poll_next()).unwrap();
-        assert_eq!(2, Rc::strong_count(&data));
+        assert_eq!(3, Rc::strong_count(&data));
         assert_eq!(1, result.unwrap());
         assert_eq!(0, flags);
 
         drop(d);
-        assert_eq!(1, Rc::strong_count(&data));
+        assert_eq!(2, Rc::strong_count(&data));
 
         drop(op);
         assert_eq!(0, driver.num_operations());
@@ -468,19 +468,15 @@ mod test {
         (op, driver, data)
     }
 
-    /* TODO is this needed?
     fn complete(op: &StrOp<Rc<()>>, result: io::Result<u32>) {
         op.driver
             .borrow_mut()
             .ops
             .complete(op.index.index().unwrap(), result, 0);
     }
-    */
 
-    /* TODO is this needed?
     fn release(driver: crate::driver::Driver) {
         // Clear ops, we aren't really doing any I/O
         driver.inner.borrow_mut().ops.0.clear();
     }
-    */
 }
