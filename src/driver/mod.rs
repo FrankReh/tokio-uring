@@ -19,6 +19,8 @@ mod open;
 
 mod read;
 
+mod readv;
+
 mod recv_from;
 
 mod rename_at;
@@ -36,6 +38,8 @@ mod unlink_at;
 mod util;
 
 mod write;
+
+mod writev;
 
 use io_uring::{cqueue, IoUring};
 use scoped_tls::scoped_thread_local;
@@ -83,8 +87,8 @@ struct Ops(Slab<Split>);
 scoped_thread_local!(pub(crate) static CURRENT: Rc<RefCell<Inner>>);
 
 impl Driver {
-    pub(crate) fn new() -> io::Result<Driver> {
-        let uring = IoUring::new(256)?;
+    pub(crate) fn new(b: &crate::Builder) -> io::Result<Driver> {
+        let uring = b.urb.build(b.entries)?;
 
         let inner = Rc::new(RefCell::new(Inner {
             ops: Ops::new(),
