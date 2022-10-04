@@ -1,4 +1,4 @@
-use std::{ops::Deref, rc::Rc, sync::Mutex};
+use std::{cell::RefCell, ops::Deref, rc::Rc};
 
 /// A Flat is created with a usize index or already in the Taken state.
 ///
@@ -117,22 +117,21 @@ impl Index {
 /// single shot op operations as well but for now, it is the multishot operations that are
 /// targetted.
 #[derive(Clone, Debug)]
-pub struct Handle(Rc<Mutex<Option<(usize, bool)>>>);
+pub struct Handle(Rc<RefCell<Option<(usize, bool)>>>);
 
 impl Handle {
     /// Return a Handle with either an index or already the Taken state, depending on the given
     /// Flat.
     fn new(flat: &Flat) -> Self {
         match *flat {
-            Flat::Idx(index) => Self(Rc::new(Mutex::new(Some((index, false))))),
-            Flat::Taken => Self(Rc::new(Mutex::new(None))),
+            Flat::Idx(index) => Self(Rc::new(RefCell::new(Some((index, false))))),
+            Flat::Taken => Self(Rc::new(RefCell::new(None))),
         }
     }
 
     /// Return the optional index.
     fn index(&self) -> Option<usize> {
-        let guard = self.0.lock().unwrap();
-        guard.deref().as_ref().map(|(index, _)| *index)
+        self.0.borrow().map(|(index, _)| index)
     }
 
     /// Called from the cancel flow. Provide the slab index of the operation to be canceled
@@ -142,7 +141,7 @@ impl Handle {
     /// Returns the index, like the index() call, but also sets the mark to true in order
     /// to return true if was_canceled is called later.
     fn index_to_cancel(&mut self) -> Option<usize> {
-        let mut guard = self.0.lock().unwrap();
+        let mut guard = self.0.borrow_mut();
         match guard.deref() {
             Some((index, _)) => {
                 let index = *index;
@@ -155,7 +154,7 @@ impl Handle {
 
     /// Return the indication of the index having been used to cancel the indexed operation.
     fn was_canceled(&self) -> bool {
-        let guard = self.0.lock().unwrap();
+        let guard = self.0.borrow_mut();
         match guard.deref() {
             Some((_, canceled)) => *canceled,
             None => false,
@@ -164,7 +163,7 @@ impl Handle {
 
     /// Reset the mark so was_canceled would return false if it were to be called again.
     fn clear_was_canceled(&self) {
-        let mut guard = self.0.lock().unwrap();
+        let mut guard = self.0.borrow_mut();
         match guard.deref() {
             Some((index, _)) => {
                 *guard = Some((*index, false)); // mark as no longer having been canceled
@@ -176,7 +175,7 @@ impl Handle {
     /// Take the index, leaving None in its place.
     /// The index will presumably be used one last time to release the item to the slab.
     fn take_index(&mut self) -> Option<usize> {
-        let mut guard = self.0.lock().unwrap();
+        let mut guard = self.0.borrow_mut();
         match guard.deref() {
             Some((index, _)) => {
                 let index = *index;
@@ -197,17 +196,14 @@ impl Handle {
     /// operation that happened to be assigned the same slab index.
     pub async fn async_cancel(&mut self) {
         // println!("async_cancel called on {:?}", self);
-        match self.index_to_cancel() {
-            Some(index) => {
-                // When the kernel has already completed an operation before its receives the
-                // cancel instruction that matches its user_data, it reports an error that the
-                // cancel failed. Here we don't care. Either way, we know the operation has
-                // completed.
-                let op = Op::async_cancel(index).unwrap(); // don't expect an error in the creation.
-                let _result = op.await;
-                // println!("async_cancel completion {:?}", _result);
-            }
-            None => (),
+        if let Some(index) = self.index_to_cancel() {
+            // When the kernel has already completed an operation before its receives the
+            // cancel instruction that matches its user_data, it reports an error that the
+            // cancel failed. Here we don't care. Either way, we know the operation has
+            // completed.
+            let op = Op::async_cancel(index).unwrap(); // don't expect an error in the creation.
+            let _result = op.await;
+            // println!("async_cancel completion {:?}", _result);
         }
     }
 }
