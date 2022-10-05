@@ -125,7 +125,7 @@ where
 
         let lifecycle = match lifecycle {
             driver::Split::Single(lifecycle) => lifecycle,
-            driver::Split::Multi(_) => panic!("expected single shot op, got multishot op"),
+            driver::Split::Multi(_) => unreachable!(),
         };
 
         match mem::replace(lifecycle, Lifecycle::Submitted) {
@@ -165,7 +165,7 @@ impl<T> Drop for Op<T> {
         };
         let lifecycle = match lifecycle {
             driver::Split::Single(lifecycle) => lifecycle,
-            driver::Split::Multi(_) => panic!("expected single shot op, got multishot op"),
+            driver::Split::Multi(_) => unreachable!(),
         };
 
         match lifecycle {

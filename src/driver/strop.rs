@@ -148,7 +148,7 @@ where
             .expect("invalid internal state");
 
         let lifecycle = match lifecycle {
-            driver::Split::Single(_) => panic!("expected multishot op, got single shot op"),
+            driver::Split::Single(_) => unreachable!(),
             driver::Split::Multi(lifecycle) => lifecycle,
         };
 
@@ -257,7 +257,7 @@ impl<T: Clone> Drop for StrOp<T> {
         };
 
         let lifecycle = match lifecycle {
-            driver::Split::Single(_) => panic!("expected multishot op, got single shot op"),
+            driver::Split::Single(_) => unreachable!(),
             driver::Split::Multi(lifecycle) => lifecycle,
         };
 
@@ -270,7 +270,7 @@ impl<T: Clone> Drop for StrOp<T> {
                 // access it?
                 *lifecycle = Lifecycle::Ignored(Box::new(self.data.take()));
             }
-            Lifecycle::Completed(_) => {
+            Lifecycle::Completed(_ready) => {
                 inner.ops.remove(index);
             }
             Lifecycle::Ignored(..) => unreachable!(),
