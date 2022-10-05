@@ -141,7 +141,14 @@ where
 
         let me = &mut *self;
         let mut inner = me.driver.borrow_mut();
-        // TODO handle case where index has been cancelled and this stream was polled anyway.
+        // TODO think more about case where index has been removed and this stream was polled anyway.
+        //
+        // The unwrap in next statement would panic if the index is already taken.
+        //
+        // Is that even possible? Is there the invariant that the index is only removed when the
+        // slab entry is being removed, and that only happens when the StrOp is being dropped? If
+        // that's the case, the StrOp doesn't exist any more for it to be polled here - so it is
+        // safe for this code to assume there is still an index to be had.
         let lifecycle = inner
             .ops
             .get_mut(me.index.index().unwrap())
