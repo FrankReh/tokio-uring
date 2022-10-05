@@ -269,16 +269,15 @@ impl<T: Clone> Drop for StrOp<T> {
         };
 
         match lifecycle {
-            Lifecycle::Submitted(_) | Lifecycle::Waiting(_, _) => {
-                // TODO fsr: understand why this transition is being made and why the index is not
-                // being removed from the slab. The StrOp is being dropped so there will be nothing
-                // left to pull data from, except this lifecycle which is still in the slab. Why is
-                // the life of the data being extended in the slab if there is nothing else to
-                // access it?
+            Lifecycle::Submitted(_ready) | Lifecycle::Waiting(_ready, _) => {
+                // The operation is still in flight, as far as the kernel is concerned.
+                // If there is any state being changed, relative to the data field, keep that
+                // field as Ignored, to extend its life.
                 *lifecycle = Lifecycle::Ignored(Box::new(self.data.take()));
             }
             Lifecycle::Completed(_ready) => {
                 inner.ops.remove(index);
+                // WIP cleanup(ready);
             }
             Lifecycle::Ignored(..) => unreachable!(),
         }
@@ -287,7 +286,9 @@ impl<T: Clone> Drop for StrOp<T> {
 
 impl Lifecycle {
     // Called when a completion queue entry has been read.
-    // Returns true, indicating the lifecycle was at ignored state.
+    // Returns true, indicating the lifecycle was at ignored state, meaning
+    // the StrOp has already been dropped and the caller should remove the entry
+    // from the slab.
     pub(super) fn result(&mut self, result: io::Result<u32>, flags: u32) -> bool {
         // Check flags to see if there is more.
         const MORE: u32 = io_uring::sys::IORING_CQE_F_MORE;
@@ -310,16 +311,19 @@ impl Lifecycle {
             Lifecycle::Waiting(mut ready, waker) => {
                 // TODO for debug, could assert ready is empty.
                 ready.push_back((result, flags));
-                *self = Lifecycle::Submitted(ready);
+                *self = Lifecycle::Submitted(ready); // back to Submitted, as the waker is used.
                 waker.wake();
                 false
             }
-            Lifecycle::Ignored(..) => true,
+            Lifecycle::Ignored(..) => {
+                // WIP cleanup((result, flags));
+                false
+            }, // still more, so don't have removed from slab yet.
             Lifecycle::Completed(..) => unreachable!("invalid operation state"), // 'more' shouldn't be possible once completed
         }
     }
     fn result_final(&mut self, result: io::Result<u32>, flags: u32) -> bool {
-        // The MORE flag was not found, so all transitions are to Completed.
+        // The MORE flag was not found, so all transitions are to Completed state.
         use std::mem;
 
         match mem::replace(self, Lifecycle::Submitted(Default::default())) {
@@ -335,7 +339,10 @@ impl Lifecycle {
                 waker.wake();
                 false
             }
-            Lifecycle::Ignored(..) => true,
+            Lifecycle::Ignored(..) => {
+                // WIP cleanup((result, flags));
+                true
+            }, // Have removed from slab.
             Lifecycle::Completed(..) => unreachable!("invalid operation state"), // double completed should not be possible
         }
     }
