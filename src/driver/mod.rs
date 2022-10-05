@@ -127,8 +127,13 @@ impl Inner {
         cq.sync();
 
         for cqe in cq {
-            // TODO fsr: not sure about this. What was triggering this cancellation action?
-            // Check the git log for when this was introduced.
+            // TODO This is left over from the first commit, where one way to get an operation
+            // canceled was shown. That code was initially commented and now removed but it might
+            // come in handy for the StrOp drop case, which is currently a WIP, because it showed a
+            // way to initiate an async cancel operation, without creating a future at all. New
+            // kernel io_uring features include a way to submit an operation with no cqe being
+            // created for it, and also includes a sync version of the cancel, so how much work
+            // should be put into this older form of cancellation is still TBD.
             if cqe.user_data() == u64::MAX {
                 // Result of the cancellation action. There isn't anything we
                 // need to do here. We must wait for the CQE for the operation
