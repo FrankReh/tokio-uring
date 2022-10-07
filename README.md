@@ -1,3 +1,8 @@
+# WIP disclaimer
+
+This is a proof-of-concept fork of a proof-of-concept repo. It may not exist long.
+Comments, questions, issues are welcome however.
+
 # tokio-uring
 
 This crate provides [`io-uring`] for [Tokio] by exposing a new Runtime that is
