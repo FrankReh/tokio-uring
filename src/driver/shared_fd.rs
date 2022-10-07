@@ -1,4 +1,7 @@
+/* TODO
+ * refer to reason the Closing variant was removed below.
 use crate::driver::{Close, Op};
+ */
 use crate::future::poll_fn;
 
 use std::cell::RefCell;
@@ -28,9 +31,12 @@ enum State {
     /// Waiting for all in-flight operation to complete.
     Waiting(Option<Waker>),
 
+    /* TODO
+     * Decide if this variant gets used again if we find a way to issue the Close while on the same
+     * stack as the driver's tick call - both attempt a borrow_mut.
     /// The FD is closing
     Closing(Op<Close>),
-
+    */
     /// The FD is fully closed
     Closed,
 }
@@ -73,6 +79,23 @@ impl Inner {
         // Close the FD
         let state = RefCell::get_mut(&mut self.state);
 
+        // TODO calling Op::close seems to be problematic because the ring driver becoming readable
+        // triggers a borrow_mut call on the driver's handle so it can call tick(),
+        // but tick reads the cq and calls complete on any cqe found, and a complete can result in
+        // an ignored boxed SharedFd being dropped, and the drop calls submit_close_op and that
+        // wants to create an Op with try_submit_with which only verifies that CURRENT is set
+        // but doesn't see the mutable borrow already taking place so it calls Op::submit_with
+        // and the first thing that does is call borrow_mut on the CURRENT driver.
+        //
+        // Dropping a close instruction into the sq ring is certainly faster than making the close
+        // system call, but the close system call can be done without trying to borrow the ring
+        // driver. Seems to be a rub between calling tick having mutably borrowed the driver
+        // and wanting to submit operations to the driver by first mutably borrowing the driver.
+
+        *state = State::Closed;
+        let _ = unsafe { std::fs::File::from_raw_fd(self.fd) };
+        /*
+
         // Submit a close operation
         *state = match Op::close(self.fd) {
             Ok(op) => State::Closing(op),
@@ -92,12 +115,16 @@ impl Inner {
                 State::Closed
             }
         };
+         */
     }
 
     /// Completes when the FD has been closed.
     async fn closed(&self) {
+        /* TODO
+         * refer to reason the Closing variant was removed above.
         use std::future::Future;
         use std::pin::Pin;
+         */
         use std::task::Poll;
 
         poll_fn(|cx| {
@@ -119,12 +146,15 @@ impl Inner {
                     *state = State::Waiting(Some(cx.waker().clone()));
                     Poll::Pending
                 }
+                /* TODO
+                 * refer to reason this variant was removed above.
                 State::Closing(op) => {
                     // Nothing to do if the close opeation failed.
                     let _ = ready!(Pin::new(op).poll(cx));
                     *state = State::Closed;
                     Poll::Ready(())
                 }
+                */
                 State::Closed => Poll::Ready(()),
             }
         })

@@ -3,7 +3,10 @@ pub(crate) mod cancellable;
 mod accept;
 
 mod close;
+/* TODO
+ * refer to reason the Closing variant was removed from shared_fd.
 pub(crate) use close::Close;
+ */
 
 mod connect;
 
