@@ -90,7 +90,7 @@ impl Socket {
     pub(crate) fn accept_multishot(
         &self,
     ) -> io::Result<(
-        impl Stream<Item = io::Result<(Socket, Option<SocketAddr>)>> + '_,
+        impl Stream<Item = io::Result<Socket>> + '_,
         cancellable::Handle,
     )> {
         use async_stream::try_stream;
@@ -111,16 +111,8 @@ impl Socket {
                     // Maybe this shouldn't be a try?
                     let fd = completion.result?;
                     let fd = SharedFd::new(fd as i32);
-                    let data = completion.data;
                     let socket = Socket { fd };
-                    let (_, addr) = unsafe {
-                        socket2::SockAddr::init(move |addr_storage, len| {
-                            *addr_storage = data.socketaddr.0.to_owned();
-                            *len = data.socketaddr.1;
-                            Ok(())
-                        })?
-                    };
-                    yield (socket, addr.as_socket());
+                    yield socket;
                 }
             },
             cancel,

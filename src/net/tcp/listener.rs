@@ -107,7 +107,7 @@ impl TcpListener {
     pub fn accept_multishot(
         &self,
     ) -> io::Result<(
-        impl Stream<Item = io::Result<(TcpStream, SocketAddr)>> + '_,
+        impl Stream<Item = io::Result<TcpStream>> + '_,
         cancellable::Handle,
     )> {
         use async_stream::try_stream;
@@ -117,12 +117,9 @@ impl TcpListener {
         Ok((
             try_stream! {
                 pin!(s);
-                while let Some((socket, socket_addr)) = s.try_next().await? {
+                while let Some(socket) = s.try_next().await? {
                     let stream = TcpStream { inner: socket };
-                    let socket_addr = socket_addr.ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::Other, "Could not get socket IP address")
-                    })?;
-                    yield (stream, socket_addr)
+                    yield stream
                 }
             },
             cancel,
