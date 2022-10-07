@@ -216,12 +216,17 @@ impl Handle {
 use crate::driver::Op;
 use std::io;
 
-struct AsyncCancel {
+// This struct and the following async_cancel method are pub(crate) so they can be used
+// by the StrOp::drop method, to get a multishot operation canceled.
+// Once the multishot operations can be canceled with a sync_cancel command,
+// the pub(crate) designations here can be removed.
+
+pub(crate) struct AsyncCancel {
     index: usize,
 }
 
 impl Op<AsyncCancel> {
-    fn async_cancel(index: usize) -> io::Result<Op<AsyncCancel>> {
+    pub(crate) fn async_cancel(index: usize) -> io::Result<Op<AsyncCancel>> {
         use io_uring::opcode;
 
         Op::submit_with(AsyncCancel { index }, |ac| {
