@@ -70,7 +70,9 @@ impl<T> Op<T> {
 
             // If the submission queue is full, flush it to the kernel
             if inner.uring.submission().is_full() {
-                if let Err(e) = inner.submit() {
+                // TODO this isn't being triggered in own tests yet
+                println!("driver/op.rs: sq is_full");
+                if let Err(e) = inner.submit2() {
                     panic!(
                         "while submission was found full, inner.submit returned {}",
                         e

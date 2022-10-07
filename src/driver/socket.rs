@@ -101,7 +101,6 @@ impl Socket {
         // for the cancel id beforehand. If a stream can only be canceled after its started its
         // 'next' loop, how to get at the cancel id?
         // Should it be cancellable even if the operation hasn't been sent yet?
-        //let mut op = StrOp::accept_multishot(&self.fd)?; // TODO this step could have failed - the submission step could have failed. Wrong args or feature not supported.
         let mut op = StrOp::accept_multishot(&self.fd)?;
         let cancel = op.cancel_handle();
         Ok((

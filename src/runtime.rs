@@ -47,17 +47,32 @@ pub fn spawn<T: std::future::Future + 'static>(task: T) -> tokio::task::JoinHand
     tokio::task::spawn_local(task)
 }
 
+/* TODO
+use std::io::Write; // bring Write into scope for flush.
+*/
+
 impl Runtime {
     pub(crate) fn new(b: &crate::Builder) -> io::Result<Runtime> {
         let rt = tokio::runtime::Builder::new_current_thread()
+            /* TODO
+            .on_thread_unpark(|| {
+                print!("<");
+                std::io::stdout().flush().unwrap();
+            })
+             */
             .on_thread_park(|| {
                 CURRENT.with(|x| {
-                    if let Err(e) = RefCell::borrow_mut(x).uring.submit() {
+                    if let Err(e) = RefCell::borrow_mut(x).submit2() {
                         panic!(
-                            "within the on_thread_park callback, uring.submit returned {}",
+                            //"within the on_thread_park callback, uring.submit returned {}",
+                            "within the on_thread_park callback, submit2 returned {}",
                             e
                         );
                     }
+                    /* TODO
+                    print!(">");
+                    std::io::stdout().flush().unwrap();
+                     */
                 });
             })
             .enable_all()
@@ -79,11 +94,16 @@ impl Runtime {
     {
         self.driver.get_ref().with(|| {
             let drive = async {
+                // TODO pp("A");
                 loop {
+                    // TODO pp("B");
                     // Wait for read-readiness
                     let mut guard = self.driver.readable().await.unwrap();
+                    // TODO pp("C");
                     self.driver.get_ref().tick();
+                    // TODO pp("D");
                     guard.clear_ready();
+                    // TODO pp("E");
                 }
             };
 
@@ -92,9 +112,17 @@ impl Runtime {
 
             self.rt
                 .block_on(self.local.run_until(crate::future::poll_fn(|cx| {
+                    // TODO pp("x");
                     assert!(drive.as_mut().poll(cx).is_pending());
+                    // TODO pp("y");
                     future.as_mut().poll(cx)
                 })))
         })
     }
 }
+/* TODO
+fn pp(s: &str) {
+    print!("{}", s);
+    std::io::stdout().flush().unwrap();
+}
+*/

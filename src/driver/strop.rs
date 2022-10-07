@@ -28,6 +28,8 @@ pub(crate) struct StrOp<T: 'static + Clone> {
 /// Operation completion. Returns stored state with the result of the operation.
 #[derive(Debug)]
 pub(crate) struct Completion<T> {
+    // TODO allow data to appear to be dead_code while we work out whether it will be read again.
+    #[allow(dead_code)]
     pub(crate) data: T,
     pub(crate) result: io::Result<u32>,
     // the field is currently only read in tests
@@ -97,7 +99,9 @@ impl<T: Clone> StrOp<T> {
 
             // If the submission queue is full, flush it to the kernel
             if inner.uring.submission().is_full() {
-                if let Err(e) = inner.submit() {
+                // TODO this isn't being triggered in own tests yet either, as in op.rs
+                println!("driver/strop.rs: sq is_full");
+                if let Err(e) = inner.submit2() {
                     panic!(
                         "while submission was found full, inner.submit returned {}",
                         e
@@ -253,33 +257,59 @@ where
 
 impl<T: Clone> Drop for StrOp<T> {
     fn drop(&mut self) {
-        let mut inner = self.driver.borrow_mut();
-        let index = match self.index.take_index() {
-            Some(index) => index,
-            None => return,
-        };
-        let lifecycle = match inner.ops.get_mut(index) {
-            Some(lifecycle) => lifecycle,
-            None => return,
-        };
+        let mut do_cancel = false;
+        let mut cancel_index = 0;
 
-        let lifecycle = match lifecycle {
-            driver::Split::Single(_) => unreachable!(),
-            driver::Split::Multi(lifecycle) => lifecycle,
-        };
+        {
+            let was_canceled = self.index.was_canceled();
+            let mut inner = self.driver.borrow_mut();
+            let index = match self.index.take_index() {
+                Some(index) => index,
+                None => return,
+            };
+            let lifecycle = match inner.ops.get_mut(index) {
+                Some(lifecycle) => lifecycle,
+                None => return,
+            };
 
-        match lifecycle {
-            Lifecycle::Submitted(_ready) | Lifecycle::Waiting(_ready, _) => {
-                // The operation is still in flight, as far as the kernel is concerned.
-                // If there is any state being changed, relative to the data field, keep that
-                // field as Ignored, to extend its life.
-                *lifecycle = Lifecycle::Ignored(Box::new(self.data.take()));
+            let lifecycle = match lifecycle {
+                driver::Split::Single(_) => unreachable!(),
+                driver::Split::Multi(lifecycle) => lifecycle,
+            };
+
+            match lifecycle {
+                Lifecycle::Submitted(_ready) | Lifecycle::Waiting(_ready, _) => {
+                    // The operation is still in flight, as far as the kernel is concerned.
+                    // If there is any state being changed, relative to the data field, keep that
+                    // field as Ignored, to extend its life.
+                    *lifecycle = Lifecycle::Ignored(Box::new(self.data.take()));
+
+                    // Issue the cancel for this operation (for this index) so the multishot
+                    // aspect of the operation is stopped.
+                    if !was_canceled {
+                        do_cancel = true;
+                        cancel_index = index;
+                    }
+                }
+                Lifecycle::Completed(_ready) => {
+                    inner.ops.remove(index);
+                    // WIP cleanup(ready);
+                }
+                Lifecycle::Ignored(..) => unreachable!(),
             }
-            Lifecycle::Completed(_ready) => {
-                inner.ops.remove(index);
-                // WIP cleanup(ready);
-            }
-            Lifecycle::Ignored(..) => unreachable!(),
+        }
+        if do_cancel {
+            // This gets the cancel instruction added to the submission ring, as that does
+            // not require being awaited on. But as this isn't an async function, we don't
+            // wait for the op to finish. We let it, itself get dropped. But as the cancel is a
+            // single shot operation, its drop is handled by the drop in the other file.
+            let _op = crate::driver::Op::async_cancel(cancel_index).unwrap(); // don't expect an error in the creation.
+
+            // TODO figure out way to shutdown streams that have been accepted by the
+            // multishot accept but that did not get handed off to the user.
+            // There could be a cleanup registered for each ready result, that is used
+            // here in the StrOp drop, but also in the `result` logic below.
+            // WIP cleanup(ready);
         }
     }
 }
@@ -318,7 +348,7 @@ impl Lifecycle {
             Lifecycle::Ignored(..) => {
                 // WIP cleanup((result, flags));
                 false
-            }, // still more, so don't have removed from slab yet.
+            } // still more, so don't have removed from slab yet.
             Lifecycle::Completed(..) => unreachable!("invalid operation state"), // 'more' shouldn't be possible once completed
         }
     }
@@ -342,7 +372,7 @@ impl Lifecycle {
             Lifecycle::Ignored(..) => {
                 // WIP cleanup((result, flags));
                 true
-            }, // Have removed from slab.
+            } // Have removed from slab.
             Lifecycle::Completed(..) => unreachable!("invalid operation state"), // double completed should not be possible
         }
     }

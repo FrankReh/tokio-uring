@@ -126,41 +126,137 @@ impl Driver {
 
 impl Inner {
     fn tick(&mut self) {
-        let mut cq = self.uring.completion();
-        cq.sync();
+        // loop, calling completion and then submit, and calling completion again
+        // and exiting when completion returns no more entries.
+        // This should handle the overflow case because the call to submit, in the forked io-uring
+        // crate, will get the syscall `enter` made with the appropriate flag set, and it shouldn't
+        // return until the cq has had entries fill again.
+        // TODO Check with uring author, is it fair to say the cq will be filled by the call to `enter`
+        // when the appropriate flag is set and there were overflow results to report?
+        let mut loop_cnt: usize = 0;
+        // let mut first_len: usize = 0;
+        loop {
+            loop_cnt += 1;
 
-        for cqe in cq {
-            // TODO This is left over from the first commit, where one way to get an operation
-            // canceled was shown. That code was initially commented and now removed but it might
-            // come in handy for the StrOp drop case, which is currently a WIP, because it showed a
-            // way to initiate an async cancel operation, without creating a future at all. New
-            // kernel io_uring features include a way to submit an operation with no cqe being
-            // created for it, and also includes a sync version of the cancel, so how much work
-            // should be put into this older form of cancellation is still TBD.
-            if cqe.user_data() == u64::MAX {
-                // Result of the cancellation action. There isn't anything we
-                // need to do here. We must wait for the CQE for the operation
-                // that was canceled.
-                continue;
+            let mut cq = self.uring.completion();
+            cq.sync();
+
+            if loop_cnt > 1 && cq.is_empty() {
+                return;
             }
+            //println!("driver/mod.rs: tick: cq entries: {}", cq.len());
 
-            let index = cqe.user_data() as _;
+            /* TODO reenable for own testing
+            if loop_cnt == 1 {
+                first_len = cq.len();
+            } else if !cq.is_empty() {
+                // Don't print anything the first time through the loop.
+                // For own debugging, its only interesting what the first was when the loop
+                // was needed two or more times.
+                if loop_cnt == 2 {
+                    println!("\ntick: loop 1, cq.len {}", first_len);
+                }
+                println!("tick: loop {}, cq.len {}", loop_cnt, cq.len());
+            }
+            */
 
-            self.ops.complete(index, resultify(&cqe), cqe.flags());
+            for cqe in cq {
+                // TODO This is left over from the first commit, where one way to get an operation
+                // canceled was shown. That code was initially commented and now removed but it might
+                // come in handy for the StrOp drop case, which is currently a WIP, because it showed a
+                // way to initiate an async cancel operation, without creating a future at all. New
+                // kernel io_uring features include a way to submit an operation with no cqe being
+                // created for it, and also includes a sync version of the cancel, so how much work
+                // should be put into this older form of cancellation is still TBD.
+                if cqe.user_data() == u64::MAX {
+                    // Result of the cancellation action. There isn't anything we
+                    // need to do here. We must wait for the CQE for the operation
+                    // that was canceled.
+                    continue;
+                }
+
+                let index = cqe.user_data() as _;
+
+                self.ops.complete(index, resultify(&cqe), cqe.flags());
+            }
+            match self.uring.submit() {
+                Ok(n) => {
+                    if n > 0 {
+                        println!("tick loop {}, submit returned n {}", loop_cnt, n);
+                    }
+                }
+                Err(ref e) if e.raw_os_error() == Some(libc::EBUSY) => {
+                    println!("tick loop {}, submit returned EBUSY", loop_cnt);
+                }
+                Err(e) => {
+                    panic!("tick: submit error: {}", e);
+                }
+            }
         }
     }
 
-    pub(crate) fn submit(&mut self) -> io::Result<()> {
+    pub(crate) fn submit2(&mut self) -> io::Result<()> {
+        use std::io::Write; // bring Write into scope for flush.
+
+        //let mut debug = false;
+        let mut loop_cnt = 0;
+        if self.uring.submission().cq_overflow() {
+            println!("driver/mod.rs: submit: found cq_overflow at top");
+            //debug = true;
+        } else {
+            //print!(".");
+        }
+        std::io::stdout().flush().unwrap();
         loop {
+            self.uring.submission().sync();
+            loop_cnt += 1;
             match self.uring.submit() {
                 Ok(_) => {
-                    self.uring.submission().sync();
                     return Ok(());
                 }
+                /*
+                 * Some debug code that may still come in handy as we find better ways to stress
+                 * the rings.
+                Ok(n) => {
+                    if self.uring.submission().cq_overflow() {
+                        println!("driver/mod.rs: submit: loop_cnt {}, Ok({}), found cq_overflow after uring.submit, before sync", loop_cnt, n);
+                        std::io::stdout().flush().unwrap();
+                        debug = true;
+                    }
+
+                    self.uring.submission().sync();
+                    self.tick(); // TODO should this be here? What's its impact on to the Readable trigger?
+
+                    if self.uring.submission().cq_overflow() {
+                        println!("driver/mod.rs: submit: loop_cnt {} found cq_overflow after uring.submit, after sync, looping around", loop_cnt);
+                        std::io::stdout().flush().unwrap();
+                        debug = true;
+                        continue;
+                    }
+                    if debug {
+                        println!("driver/mod.rs: submit: loop_cnt {} cq_overflow clear", loop_cnt);
+                        std::io::stdout().flush().unwrap();
+                    }
+
+                    return Ok(());
+                }
+                */
                 Err(ref e) if e.raw_os_error() == Some(libc::EBUSY) => {
-                    self.tick();
+                    //self.tick(); // TODO should this be here? What's it do to the Readable trigger?
+                    // TODO this call to tick could be with a no-recurse flag passed in
+                    // as this submit will be called by tick very soon, as part of the normal path.
+                    // EBUSY indicates the cq overflow condition, but overflow or not, the cq could
+                    // have entries in it, and higher level logic could be responsible for the
+                    // enter/tick dance.
+
+                    // TODO trying to even create a test case that triggers this EBUSY with the
+                    // forked io-uring crate and the loop that is in tick now.
+                    println!("driver/mod.rs: submit: loop_cnt {}, error EBUSY", loop_cnt);
+                    std::io::stdout().flush().unwrap();
                 }
                 Err(e) => {
+                    println!("driver/mod.rs: submit: loop_cnt {}, Err({})", loop_cnt, e);
+                    std::io::stdout().flush().unwrap();
                     return Err(e);
                 }
             }
