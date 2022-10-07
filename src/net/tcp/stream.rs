@@ -153,6 +153,20 @@ impl TcpStream {
         // TODO same method for unix stream for consistency.
         self.inner.shutdown(how)
     }
+
+    /// Returns the socket address of the remote peer of this TCP connection.
+    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
+        use std::os::unix::io::FromRawFd;
+
+        let fd = self.inner.as_raw_fd();
+        // SAFETY: Our fd is the handle the kernel has given us for a TcpListener.
+        // Create a std::net::TcpListener long enough to call its peer_addr method
+        // and then forget it so the socket is not closed here.
+        let s = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+        let peer_addr = s.peer_addr();
+        std::mem::forget(s);
+        peer_addr
+    }
 }
 
 impl AsRawFd for TcpStream {
