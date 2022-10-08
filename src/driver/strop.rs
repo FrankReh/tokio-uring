@@ -486,8 +486,6 @@ mod test {
         release(driver);
     }
 
-    /* TODO disable this test while it is hanging.
-    */
     #[test]
     fn complete_after_drop() {
         let (op, driver, data) = init();
