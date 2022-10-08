@@ -386,18 +386,20 @@ mod test {
 
     use super::*;
 
-    /* TODO disable this test while it is hanging.
     #[test]
     fn op_stays_in_slab_on_drop() {
         let (op, driver, data) = init();
-        drop(op);
+        driver.with(|| {
+            drop(op);
+        });
 
         assert_eq!(2, Rc::strong_count(&data));
 
-        assert_eq!(1, driver.num_operations());
+        // The 2 operations: the `op` above,
+        // and the cancel for it that was issued by the drop.
+        assert_eq!(2, driver.num_operations());
         release(driver);
     }
-    */
 
     #[test]
     fn poll_op_once() {
@@ -485,21 +487,25 @@ mod test {
     }
 
     /* TODO disable this test while it is hanging.
+    */
     #[test]
     fn complete_after_drop() {
         let (op, driver, data) = init();
         let index = op.index.index().unwrap();
-        drop(op);
+        driver.with(|| {
+            drop(op);
+        });
 
         assert_eq!(2, Rc::strong_count(&data));
 
-        assert_eq!(1, driver.num_operations());
+        // Two operations, the original op and its cancel for being dropped.
+        assert_eq!(2, driver.num_operations());
         driver.inner.borrow_mut().ops.complete(index, Ok(1), 0);
         assert_eq!(1, Rc::strong_count(&data));
-        assert_eq!(0, driver.num_operations());
+        // One operation, the cancel.
+        assert_eq!(1, driver.num_operations());
         release(driver);
     }
-    */
 
     fn init() -> (StrOp<Rc<()>>, crate::driver::Driver, Rc<()>) {
         use crate::driver::Driver;
