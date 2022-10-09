@@ -33,12 +33,12 @@ fn main() -> io::Result<()> {
 type NotSupportedFlag = Rc<Cell<bool>>;
 
 async fn test_dropped_accept_stream() -> io::Result<()> {
-    // Channel for getting the listener's address and to ensure the timing of the accept
-    // operations having been sent to the kernel.
 
     let count: i32 = 2; // How many connections to accept before letting accept stream be dropped.
     let not_supported: NotSupportedFlag = Rc::new(Cell::new(false));
 
+    // Channel for getting the listener's address and to ensure the timing of the accept
+    // operations having been sent to the kernel.
     let (tx_ch, rx_ch) = oneshot::channel();
 
     let accept_task = spawn(accept(tx_ch, count, not_supported.clone()));

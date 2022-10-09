@@ -101,9 +101,9 @@ impl TcpListener {
         Ok((stream, socket_addr))
     }
 
-    /// TODO missing doc
-    /// This is the slow version of the accept_multishot operation, where the implementation is
-    /// a sequence of single accept operations under the hood.
+    /// Return a stream of accepted TcpStreams.
+    ///
+    /// Requires kernel 5.19+.
     pub fn accept_multishot(
         &self,
     ) -> io::Result<(
@@ -126,9 +126,11 @@ impl TcpListener {
         ))
     }
 
-    /// TODO missing doc
     /// This is the slow version of the accept_multishot operation, where the implementation is
     /// a sequence of single accept operations under the hood.
+    ///
+    /// TODO It was used to bootstrap the regular version of this function and now doesn't serve much
+    /// purpose. Probably will not be merged into anything permanent.
     pub fn accept_multishot_slow(
         &self,
     ) -> impl Stream<Item = io::Result<(TcpStream, SocketAddr)>> + '_ {
