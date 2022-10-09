@@ -33,7 +33,6 @@ fn main() -> io::Result<()> {
 type NotSupportedFlag = Rc<Cell<bool>>;
 
 async fn test_dropped_accept_stream() -> io::Result<()> {
-
     let count: i32 = 2; // How many connections to accept before letting accept stream be dropped.
     let not_supported: NotSupportedFlag = Rc::new(Cell::new(false));
 
@@ -101,7 +100,7 @@ async fn accept(
 ) -> io::Result<()> {
     let listener = TcpListener::bind(ADDRESS.parse().unwrap())?;
 
-    let (accept_stream, _) = listener.accept_multishot().unwrap();
+    let accept_stream = listener.accept_multishot().unwrap();
 
     if let Err(_) = tx_ch.send(listener.local_addr().unwrap()) {
         panic!("The receiver dropped");

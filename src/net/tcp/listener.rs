@@ -104,16 +104,44 @@ impl TcpListener {
     /// Return a stream of accepted TcpStreams.
     ///
     /// Requires kernel 5.19+.
-    pub fn accept_multishot(
+    pub fn accept_multishot(&self) -> io::Result<impl Stream<Item = io::Result<TcpStream>> + '_> {
+        let (stream, _) = self.accept_multishot_with_cancel_option(false)?;
+        Ok(stream)
+    }
+
+    /// Return a stream of accepted TcpStreams and a cancel handle.
+    /// The cancel handle allows for the multi accept operation to be canceled
+    /// which in turn closes the stream.
+    ///
+    /// Requires kernel 5.19+.
+    pub fn accept_multishot_with_cancel(
         &self,
     ) -> io::Result<(
         impl Stream<Item = io::Result<TcpStream>> + '_,
         cancellable::Handle,
     )> {
+        let (stream, cancel_option) = self.accept_multishot_with_cancel_option(true)?;
+
+        Ok((stream, cancel_option.unwrap()))
+    }
+
+    /// Return a stream of accepted TcpStreams and an optional cancel handle.
+    /// This is primarily meant as an internal function that is called by accept_multishot and
+    /// accept_multishot_with_cancel. But there could be times when the user wants the creation
+    /// of a cancel handle controlled by their own boolean, so this is made public.
+    ///
+    /// Requires kernel 5.19+.
+    pub fn accept_multishot_with_cancel_option(
+        &self,
+        with_cancel: bool,
+    ) -> io::Result<(
+        impl Stream<Item = io::Result<TcpStream>> + '_,
+        Option<cancellable::Handle>,
+    )> {
         use async_stream::try_stream;
         use tokio::pin;
         use tokio_stream::StreamExt;
-        let (s, cancel) = self.inner.accept_multishot()?;
+        let (s, cancel_option) = self.inner.accept_multishot(with_cancel)?;
         Ok((
             try_stream! {
                 pin!(s);
@@ -122,7 +150,7 @@ impl TcpListener {
                     yield stream
                 }
             },
-            cancel,
+            cancel_option,
         ))
     }
 

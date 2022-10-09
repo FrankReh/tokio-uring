@@ -1,3 +1,6 @@
+// Example of using two forms of accept_multishot: one that is explicitly cancellable and one that
+// is not.
+
 use std::io;
 use std::rc::Rc;
 use tokio::time::Duration;
@@ -62,21 +65,24 @@ fn main() -> io::Result<()> {
                 let _dumper = tokio_uring::spawn(dump_ctx(ctx.clone()));
 
                 // TODO maybe fix need for mut cancel
-                let (accept_stream, mut cancel) = listener.accept_multishot().unwrap();
+                let (accept_stream, mut cancel) = listener.accept_multishot_with_cancel().unwrap();
                 pin!(accept_stream);
 
                 let closer: JoinHandle<io::Result<()>> = tokio_uring::spawn(async move {
                     // The functionality of this benchmark/test server would be perfectly handled
                     // with a single-shot accept here, but for now, we use the multishot version
                     // because it is the function under test.
-                    let (c_stream, mut c_cancel) = close_listener.accept_multishot().unwrap();
+                    let c_stream = close_listener.accept_multishot().unwrap();
                     pin!(c_stream);
-                    c_stream.next().await;
-                    cancel.async_cancel().await;
-                    c_cancel.async_cancel().await;
 
-                    // dropping c_stream would get it canceled too so the above
-                    // c_cancel.async_cancel().await isn't strictly necessary.
+                    // Use first TCP connection to this port,
+
+                    c_stream.next().await;
+
+                    // to trigger a shutdown of the process by cancelling the accept stream.
+
+                    cancel.async_cancel().await;
+
                     Ok(())
                 });
 

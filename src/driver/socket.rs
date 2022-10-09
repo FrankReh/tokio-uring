@@ -85,24 +85,32 @@ impl Socket {
         Ok((socket, addr.as_socket()))
     }
 
-    // Create an async stream of sockets and optional addresses from the open file descriptor.
-    // TODO
+    // Issue a multi accept operation, returning an async stream of sockets and optionally a cancel
+    // handle.
+    //
+    // The cancel handle, if requested, can be used to cancel the multi accept operation and that
+    // in turn causes the async stream to be closed. Whether or not the cancel handle is requested,
+    // simply dropping the stream is another way of cancelling the multi accept operation.
     pub(crate) fn accept_multishot(
         &self,
+        with_cancel: bool,
     ) -> io::Result<(
         impl Stream<Item = io::Result<Socket>> + '_,
-        cancellable::Handle,
+        Option<cancellable::Handle>,
     )> {
         use async_stream::try_stream;
         use tokio_stream::StreamExt;
 
-        // TODO what are the semantics of async cancel for a stream?
-        // If the StrOp is only created when the stream is awaited, then there is no index to use
-        // for the cancel id beforehand. If a stream can only be canceled after its started its
-        // 'next' loop, how to get at the cancel id?
-        // Should it be cancellable even if the operation hasn't been sent yet?
         let mut op = StrOp::accept_multishot(&self.fd)?;
-        let cancel = op.cancel_handle();
+
+        // If `with_cancel`, create the cancel handle and return it allowing the user to call
+        // cancel at any time. The user's cancel will be a noop if the stream has already
+        // completed.
+        let cancel_option = if with_cancel {
+            Some(op.cancel_handle())
+        } else {
+            None
+        };
         Ok((
             try_stream! {
                 while let Some(completion) = op.next().await {
@@ -114,7 +122,7 @@ impl Socket {
                     yield socket;
                 }
             },
-            cancel,
+            cancel_option,
         ))
     }
 
