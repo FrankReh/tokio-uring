@@ -3,6 +3,7 @@
 
 mod pool;
 pub(super) use pool::Pool;
+pub(super) use pool::Waiter;
 
 mod registry;
 pub(super) use registry::Registry;

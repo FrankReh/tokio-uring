@@ -1,4 +1,5 @@
 use crate::buf::fixed::{handle::CheckedOutBuf, FixedBuffers};
+use broadcast_rs::waiter;
 
 use libc::{iovec, UIO_MAXIOV};
 use std::cmp;
@@ -6,7 +7,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::ptr;
 use std::slice;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 
 // Internal state shared by FixedBufPool and FixedBuf handles.
 pub(crate) struct Pool {
@@ -21,8 +22,22 @@ pub(crate) struct Pool {
     states: Vec<BufState>,
     // Table of head indices of the free buffer lists in each size bucket.
     free_buf_head_by_cap: HashMap<usize, u16>,
+
     // Wakers for tasks pending on poll_next
-    waiting_on_next: Vec<Waker>,
+    waiter_list: waiter::List,
+}
+
+pub(crate) struct Waiter {
+    elem: waiter::Elem,
+}
+impl Waiter {
+    pub(crate) fn new() -> Waiter {
+        Waiter {
+            // Safety: the elem is released with self.waiter_list.remove_waiter(&waiter.elem)
+            // called when the Next Future is dropped.
+            elem: unsafe { waiter::Elem::new() },
+        }
+    }
 }
 
 // State information of a buffer in the registry,
@@ -76,7 +91,7 @@ impl Pool {
             orig_cap,
             states,
             free_buf_head_by_cap,
-            waiting_on_next: vec![],
+            waiter_list: waiter::List::new(),
         }
     }
 
@@ -118,15 +133,33 @@ impl Pool {
         })
     }
 
-    pub(crate) fn poll_next(&mut self, cap: usize, cx: &mut Context<'_>) -> Poll<CheckedOutBuf> {
+    pub(crate) fn poll_next(
+        &mut self,
+        cap: usize,
+        waiter: &Waiter,
+        cx: &mut Context<'_>,
+    ) -> Poll<CheckedOutBuf> {
         if let Some(buf) = self.try_next(cap) {
             return Poll::Ready(buf);
         }
-        let waker = cx.waker();
-        if !self.waiting_on_next.iter().any(|w| w.will_wake(waker)) {
-            self.waiting_on_next.push(waker.clone());
-        }
+        self.waiter_list.enqueue_waiter(&waiter.elem, cx);
         Poll::Pending
+    }
+
+    /// Removes the waiter from the linked list of waiters.
+    ///
+    /// Typically called from the future type that wraps the waiter element.
+    /// The waiter element cannot remove itself from the linked list because it does
+    /// not maintain a reference to the list header.
+    pub(crate) fn remove_waiter_from_waiters(&mut self, waiter: &Waiter) {
+        // Safety: the elem could only be in the waiters list.
+        unsafe {
+            self.waiter_list.remove_waiter(&waiter.elem);
+        }
+    }
+
+    fn awake_waiters(&mut self) {
+        self.waiter_list.awake_waiters();
     }
 
     fn check_in_internal(&mut self, index: u16, init_len: usize) {
@@ -144,12 +177,7 @@ impl Pool {
 
         *state = BufState::Free { init_len, next };
 
-        if !self.waiting_on_next.is_empty() {
-            // Wake up tasks pending on poll_next
-            for waker in mem::take(&mut self.waiting_on_next) {
-                waker.wake()
-            }
-        }
+        self.awake_waiters();
     }
 }
 

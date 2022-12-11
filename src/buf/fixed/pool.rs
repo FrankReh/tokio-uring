@@ -243,9 +243,14 @@ impl FixedBufPool {
     /// an async context should use [`next`].
     ///
     /// [`next`]: Self::next
-    pub fn poll_next(&mut self, cap: usize, cx: &mut Context<'_>) -> Poll<FixedBuf> {
+    fn poll_next(
+        &self,
+        cap: usize,
+        waiter: &plumbing::Waiter,
+        cx: &mut Context<'_>,
+    ) -> Poll<FixedBuf> {
         let mut inner = self.inner.borrow_mut();
-        let data = ready!(inner.poll_next(cap, cx));
+        let data = ready!(inner.poll_next(cap, waiter, cx));
         let registry = Rc::clone(&self.inner);
         // Safety: the validity of buffer data is ensured by
         // plumbing::Pool::poll_next
@@ -269,7 +274,11 @@ impl FixedBufPool {
     /// will complete I/O operations owning the buffers, or back it up with a
     /// timeout using, for example, `tokio::util::timeout`.
     pub fn next(&mut self, cap: usize) -> Next<'_> {
-        Next { pool: self, cap }
+        Next {
+            pool: self,
+            cap,
+            waiter: plumbing::Waiter::new(),
+        }
     }
 }
 
@@ -277,14 +286,30 @@ impl FixedBufPool {
 pub struct Next<'a> {
     pool: &'a mut FixedBufPool,
     cap: usize,
+
+    /// Entry in inner's list of waiters. Also contains the waker clone.
+    waiter: plumbing::Waiter,
 }
 
 impl<'a> Future for Next<'a> {
     type Output = FixedBuf;
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<FixedBuf> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<FixedBuf> {
         let cap = self.cap;
-        self.pool.poll_next(cap, cx)
+        self.pool.poll_next(cap, &self.waiter, cx)
     }
 }
+impl<'a> Drop for Next<'a> {
+    fn drop(&mut self) {
+        let mut inner = self.pool.inner.borrow_mut();
+        inner.remove_waiter_from_waiters(&self.waiter);
+    }
+}
+
+// TODO unit tests for next() and next().await
+// See that awaiting works.
+// See that the linked list can be walkded and counted as expected.
+//   after a few installs
+//   after a buffer has been released so the list was released and then rebuilt with one less
+//   after another task has been canceled so its blocked future should be released
